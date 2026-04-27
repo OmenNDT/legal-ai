@@ -67,6 +67,7 @@ class LegalChatbot:
         intent_model_path: Optional[str] = None,
         ner_model_path: Optional[str] = None,
         scorer_model_path: Optional[str] = None,
+        lora_checkpoint_path: Optional[str] = None,
         search_engine: Optional[LegalSearchEngine] = None,
         knowledge_graph: Optional[LegalKnowledgeGraph] = None,
     ):
@@ -81,28 +82,70 @@ class LegalChatbot:
         self._intent_model_path = intent_model_path
         self._ner_model_path = ner_model_path
         self._scorer_model_path = scorer_model_path
+        self._lora_checkpoint_path = lora_checkpoint_path
+        self._lora_loaded = False
+
+    def _load_lora(self):
+        """Load LoRA checkpoint for both intent and NER."""
+        if self._lora_loaded or not self._lora_checkpoint_path:
+            return
+        import torch
+        from transformers import AutoTokenizer
+
+        checkpoint = torch.load(self._lora_checkpoint_path, map_location="cpu")
+        phobert_state = {k.replace("phobert.", ""): v
+                         for k, v in checkpoint["model_state_dict"].items()
+                         if k.startswith("phobert.")}
+
+        # Intent
+        self._intent_classifier = PhoBERTIntentClassifier()
+        self._intent_tokenizer = AutoTokenizer.from_pretrained("vinai/phobert-base")
+        intent_state = {k.replace("intent_classifier.", ""): v
+                        for k, v in checkpoint["model_state_dict"].items()
+                        if k.startswith("intent_classifier.")}
+        self._intent_classifier.phobert.load_state_dict(phobert_state, strict=False)
+        self._intent_classifier.classifier.load_state_dict(intent_state, strict=False)
+        self._intent_classifier.eval()
+
+        # NER
+        self._ner_tagger = PhoBERTNERTagger()
+        self._ner_tokenizer = AutoTokenizer.from_pretrained("vinai/phobert-base")
+        ner_state = {k.replace("ner_classifier.", ""): v
+                     for k, v in checkpoint["model_state_dict"].items()
+                     if k.startswith("ner_classifier.")}
+        self._ner_tagger.phobert.load_state_dict(phobert_state, strict=False)
+        self._ner_tagger.classifier.load_state_dict(ner_state, strict=False)
+        self._ner_tagger.eval()
+
+        self._lora_loaded = True
 
     def _load_intent(self):
         if self._intent_classifier is None:
-            from transformers import AutoTokenizer
-            self._intent_classifier = PhoBERTIntentClassifier()
-            self._intent_tokenizer = AutoTokenizer.from_pretrained("vinai/phobert-base")
-            if self._intent_model_path:
-                import torch
-                state_dict = torch.load(self._intent_model_path, map_location="cpu")
-                self._intent_classifier.load_state_dict(state_dict)
-            self._intent_classifier.eval()
+            if self._lora_checkpoint_path:
+                self._load_lora()
+            else:
+                from transformers import AutoTokenizer
+                self._intent_classifier = PhoBERTIntentClassifier()
+                self._intent_tokenizer = AutoTokenizer.from_pretrained("vinai/phobert-base")
+                if self._intent_model_path:
+                    import torch
+                    state_dict = torch.load(self._intent_model_path, map_location="cpu")
+                    self._intent_classifier.load_state_dict(state_dict)
+                self._intent_classifier.eval()
 
     def _load_ner(self):
         if self._ner_tagger is None:
-            from transformers import AutoTokenizer
-            self._ner_tagger = PhoBERTNERTagger()
-            self._ner_tokenizer = AutoTokenizer.from_pretrained("vinai/phobert-base")
-            if self._ner_model_path:
-                import torch
-                state_dict = torch.load(self._ner_model_path, map_location="cpu")
-                self._ner_tagger.load_state_dict(state_dict)
-            self._ner_tagger.eval()
+            if self._lora_checkpoint_path:
+                self._load_lora()
+            else:
+                from transformers import AutoTokenizer
+                self._ner_tagger = PhoBERTNERTagger()
+                self._ner_tokenizer = AutoTokenizer.from_pretrained("vinai/phobert-base")
+                if self._ner_model_path:
+                    import torch
+                    state_dict = torch.load(self._ner_model_path, map_location="cpu")
+                    self._ner_tagger.load_state_dict(state_dict)
+                self._ner_tagger.eval()
 
     def _load_summarizer(self):
         if self._summarizer is None:

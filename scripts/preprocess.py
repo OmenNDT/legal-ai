@@ -23,20 +23,12 @@ def preprocess_qa_data():
     # Handle both formats: {"count": N, "sample": {...}} and [item, ...]
     if isinstance(data, dict) and "sample" in data:
         items = [_unwrap(data["sample"])]
-        # If there are more items at top level
-        if "items" in data:
-            items.extend([_unwrap(i) for i in data["items"]])
-    elif isinstance(data, list):
-        items = [_unwrap(i) for i in data]
-    elif isinstance(data, dict) and "count" in data:
-        # yuiTC format: {"count": N, "columns": [...], "sample": {...}}
-        # The full data might be too large, try to parse
-        items = []
+        # yuiTC format: keys are string indices "0", "1", ..., each is a QA pair
         for key in data:
             if isinstance(data[key], dict) and "question" in data[key]:
                 items.append(_unwrap(data[key]))
-        if not items and "sample" in data:
-            items.append(_unwrap(data["sample"]))
+    elif isinstance(data, list):
+        items = [_unwrap(i) for i in data]
     else:
         print(f"Unexpected data format: {type(data)}")
         return

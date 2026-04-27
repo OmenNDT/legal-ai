@@ -12,26 +12,36 @@ _segmenter = None
 
 
 def get_segmenter(save_dir: str = "./vncorenlp"):
-    """Load VnCoreNLP RDRSegmenter for word segmentation.
+    """Load word segmenter for Vietnamese text.
 
-    Call this once and reuse. Downloads model on first call.
+    Tries VnCoreNLP first, falls back to underthesea if Java unavailable.
     """
     global _segmenter
     if _segmenter is not None:
         return _segmenter
 
+    # Try VnCoreNLP first
     try:
         import py_vncorenlp
         model_dir = Path(save_dir)
+        model_dir.mkdir(parents=True, exist_ok=True)
         if not (model_dir / "RDRSEG").exists():
             py_vncorenlp.download_model(save_dir=save_dir)
         _segmenter = py_vncorenlp.VnCoreNLP(
             annotators=["wseg"], save_dir=save_dir
         )
         return _segmenter
+    except Exception:
+        pass  # Fall through to underthesea
+
+    # Fallback: underthesea (pure Python, no Java)
+    try:
+        from underthesea import word_tokenize
+        _segmenter = word_tokenize
+        return _segmenter
     except ImportError:
         raise ImportError(
-            "py_vncorenlp not installed. Run: pip install py-vncorenlp"
+            "No Vietnamese segmenter available. Run: pip install underthesea"
         )
 
 
@@ -44,8 +54,12 @@ def segment_text(text: str, save_dir: str = "./vncorenlp") -> str:
     Returns a single string with underscore-joined compound words.
     """
     segmenter = get_segmenter(save_dir)
+    # VnCoreNLP returns list of sentences; underthesea returns list of tokens
+    if callable(segmenter) and not hasattr(segmenter, 'word_segment'):
+        # underthesea fallback: list of tokens
+        tokens = segmenter(text)
+        return " ".join(tokens)
     sentences = segmenter.word_segment(text)
-    # word_segment returns list of sentences; join them
     return " ".join(sentences)
 
 

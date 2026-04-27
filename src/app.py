@@ -12,6 +12,9 @@ from src.common.config import (
     SEARCH_INDEX_PATH, KG_PATH,
     INTENT_MODEL_DIR, NER_MODEL_DIR, SCORER_MODEL_DIR,
 )
+
+# LoRA checkpoint for Luật Kế toán 2025
+LORA_CHECKPOINT_PATH = "data/models/lora_ke_toan/best_model.pt"
 from src.search.search_engine import LegalSearchEngine
 from src.knowledge.graph_builder import LegalKnowledgeGraph
 from src.knowledge.reasoner import LegalReasoner
@@ -168,7 +171,12 @@ def chat(req: QueryRequest):
     """Full chatbot pipeline: intent → NER → search → summarize → KG → response."""
     from src.chatbot.pipeline import LegalChatbot
 
-    chatbot = LegalChatbot(search_engine=search_engine, knowledge_graph=kg)
+    lora_path = LORA_CHECKPOINT_PATH if Path(LORA_CHECKPOINT_PATH).exists() else None
+    chatbot = LegalChatbot(
+        search_engine=search_engine,
+        knowledge_graph=kg,
+        lora_checkpoint_path=lora_path,
+    )
     response = chatbot.ask(req.question, top_k_docs=req.top_k)
 
     return {
