@@ -38,7 +38,6 @@ venv/
 
 # Models (too large for git)
 *.pth
-*.pt
 *.bin
 *.onnx
 *.pickle
