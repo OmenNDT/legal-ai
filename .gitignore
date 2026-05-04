@@ -42,3 +42,7 @@ venv/
 *.onnx
 *.pickle
 *.gpickle
+
+# Large directories
+data/
+models/
