@@ -1,7 +1,6 @@
 # Data files (large, downloaded via scripts)
 data/raw/
 data/processed/
-data/models/
 data/embeddings/
 
 # Python cache
