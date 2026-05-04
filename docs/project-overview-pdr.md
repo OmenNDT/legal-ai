@@ -63,6 +63,15 @@ LegalAI is a Vietnamese legal AI assistant that combines 4 specialized modules, 
   - Intent-to-module routing table
   - Structured ChatResponse with answer, intent, entities, sources, reasoning
 
+### PDR-006: LoRA Fine-Tuning Pipeline
+- **Description**: Fine-tune PhoBERT with LoRA adapters on legal domain data
+- **Acceptance Criteria**:
+  - Parse raw legal text into structured hierarchy (Chuong -> Dieu -> Khoan -> Diem)
+  - Generate QA pairs with intent labels and BIO NER tags
+  - Train multi-task LoRA (intent + NER) with PEFT
+  - Inference script loads trained checkpoint and produces top-3 intent predictions + extracted entities
+  - Checkpoint saved to `data/models/lora_ke_toan/best_model.pt`
+
 ## Technical Constraints
 
 | Constraint | Value |
@@ -70,18 +79,18 @@ LegalAI is a Vietnamese legal AI assistant that combines 4 specialized modules, 
 | Python version | 3.11+ |
 | Base model | vinai/phobert-base |
 | Max sequence length | 256 tokens |
-| Model status | Heads defined, NOT trained (TF-IDF fallback active) |
+| Model status | LoRA checkpoint exists (`data/models/lora_ke_toan/best_model.pt`); PhoBERT heads use TF-IDF fallback when LoRA not loaded |
 | Data size | 89,261 QA pairs + 600 legal documents |
 | Knowledge graph | 20,382 nodes, 57,047 edges |
 | Search index | 599 docs, 5,454 terms |
 
 ## Current Limitations
 
-1. **No trained models**: PhoBERT heads use random weights; intent/NER/scorer fall back to TF-IDF heuristics
-2. **No tests**: Zero test coverage
-3. **No training scripts**: No fine-tuning pipeline for PhoBERT heads
-4. **No notebooks**: No exploration/evaluation notebooks
-5. **VnCoreNLP dependency**: Word segmentation requires py-vncorenlp download on first run
+1. **Test coverage**: Zero tests (`tests/` directory is empty)
+2. **PEFT dependency**: `train_lora_phobert.py` imports `peft` but it is absent from `requirements.txt`
+3. **No notebooks**: No exploration/evaluation notebooks
+4. **VnCoreNLP dependency**: Word segmentation requires py-vncorenlp download on first run (~500MB)
+5. **Summarizer still on TF-IDF fallback**: `src/app.py` hardcodes `use_model=False` in `/summarize` endpoint
 
 ## Success Metrics
 

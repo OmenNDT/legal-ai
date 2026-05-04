@@ -1,0 +1,4846 @@
+This file is a merged representation of a subset of the codebase, containing specifically included files, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of a subset of the repository's contents that is considered the most important context.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Only files matching these patterns are included: src/**/*.py, scripts/**/*.py, requirements.txt, src/common/config.py
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+scripts/
+  build_graph.py
+  build_index.py
+  download_data.py
+  generate_qa_dataset_v2.py
+  generate_qa_dataset.py
+  inference_lora.py
+  parse_luat_ke_toan.py
+  preprocess.py
+  train_lora_phobert.py
+src/
+  chatbot/
+    __init__.py
+    intent_classifier.py
+    ner_tagger.py
+    pipeline.py
+  common/
+    config.py
+    data_loader.py
+    text_processor.py
+  knowledge/
+    __init__.py
+    entity_extractor.py
+    graph_builder.py
+    reasoner.py
+    visualizer.py
+  search/
+    __init__.py
+    bm25.py
+    inverted_index.py
+    search_engine.py
+    trie.py
+  summarizer/
+    __init__.py
+    sentence_scorer.py
+    summarizer.py
+    textrank.py
+  __init__.py
+  app.py
+  ui.py
+requirements.txt
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="scripts/build_graph.py">
+"""Build legal knowledge graph from legal documents and QA data."""
+
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from src.common.config import PROCESSED_DIR, KG_PATH, QA_DATA_PATH
+from src.knowledge.graph_builder import LegalKnowledgeGraph
+from src.knowledge.entity_extractor import LegalEntityExtractor, LegalRelationExtractor
+from src.common.text_processor import clean_vietnamese, extract_legal_references
+
+
+def build_from_legal_docs(docs_path: str = None):
+    """Build KG from processed legal documents."""
+    docs_path = Path(docs_path or PROCESSED_DIR / "legal_docs.json")
+
+    if not docs_path.exists():
+        print(f"Error: {docs_path} not found. Run preprocess.py first.")
+        return None
+
+    with open(docs_path, encoding="utf-8") as f:
+        docs = json.load(f)
+
+    print(f"Building KG from {len(docs)} legal documents...")
+    kg = LegalKnowledgeGraph()
+
+    for doc in docs:
+        kg.add_document(doc)
+
+    stats = kg.get_stats()
+    print(f"  Nodes: {stats['nodes']}, Edges: {stats['edges']}")
+    print(f"  Node types: {stats['node_types']}")
+    print(f"  Relation types: {stats['relation_types']}")
+
+    return kg
+
+
+def build_from_qa_data(qa_path: str = None):
+    """Build KG entities and relations from QA data (supplementary)."""
+    qa_path = Path(qa_path or QA_DATA_PATH)
+
+    if not qa_path.exists():
+        print(f"Error: {qa_path} not found.")
+        return None
+
+    with open(qa_path, encoding="utf-8") as f:
+        data = json.load(f)
+
+    # Handle different QA data formats
+    if isinstance(data, dict) and "sample" in data:
+        items = [_unwrap(data["sample"])]
+    elif isinstance(data, list):
+        items = data[:1000]  # Process first 1000 for KG
+    else:
+        print("Unexpected QA data format.")
+        return None
+
+    print(f"Extracting KG from {len(items)} QA pairs...")
+    entity_extractor = LegalEntityExtractor()
+    relation_extractor = LegalRelationExtractor()
+
+    kg = LegalKnowledgeGraph()
+
+    for item in items:
+        context = item.get("context", "")
+        question = item.get("question", "")
+        if not context:
+            continue
+
+        # Extract entities from question and context
+        q_entities = entity_extractor.extract(question)
+        c_entities = entity_extractor.extract(context)
+
+        # Create QA node
+        qa_id = f"QA_{item.get('qid', hash(question) % 100000)}"
+        from src.knowledge.entity_extractor import LegalEntity
+        qa_entity = LegalEntity(
+            id=qa_id,
+            type="QUESTION",
+            name=question[:100],
+            properties={"full_question": question, "context_id": item.get("cid", "")},
+        )
+        kg.add_entity(qa_entity)
+
+        # Add entities and link to question
+        for entity in q_entities + c_entities:
+            kg.add_entity(entity)
+            kg.add_relation(LegalRelation(
+                source_id=qa_id,
+                target_id=entity.id,
+                relation_type="THAM_CHIEU",
+                properties={"evidence": entity.name},
+            ))
+
+    stats = kg.get_stats()
+    print(f"  QA KG: {stats['nodes']} nodes, {stats['edges']} edges")
+    return kg
+
+
+def _unwrap(entry):
+    return {
+        "question": entry.get("question", ""),
+        "context": entry.get("context_list", entry.get("context", "")),
+        "qid": entry.get("qid", ""),
+        "cid": entry.get("cid", ""),
+    }
+
+
+if __name__ == "__main__":
+    print("Building Knowledge Graph from legal documents...")
+    kg_docs = build_from_legal_docs()
+
+    print("\nBuilding Knowledge Graph from QA data...")
+    kg_qa = build_from_qa_data()
+
+    # Merge if both exist
+    if kg_docs and kg_qa:
+        # Add QA nodes and edges to docs KG
+        for node, data in kg_qa.G.nodes(data=True):
+            kg_docs.G.add_node(node, **data)
+        for source, target, data in kg_qa.G.edges(data=True):
+            kg_docs.G.add_edge(source, target, **data)
+
+        stats = kg_docs.get_stats()
+        print(f"\nMerged KG: {stats['nodes']} nodes, {stats['edges']} edges")
+
+    if kg_docs:
+        kg_docs.save()
+</file>
+
+<file path="scripts/build_index.py">
+"""Build search index and knowledge graph from legal corpus."""
+
+import json
+import sys
+from pathlib import Path
+
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from src.common.config import PROCESSED_DIR, SEARCH_INDEX_PATH, KG_PATH
+from src.search.search_engine import LegalSearchEngine
+from src.knowledge.graph_builder import LegalKnowledgeGraph
+from src.common.text_processor import clean_vietnamese
+
+
+def build_search_index(docs_path: str = None, output_path: str = None):
+    """Build inverted index + BM25 + Trie from processed legal documents."""
+    docs_path = Path(docs_path or PROCESSED_DIR / "legal_docs.json")
+    output_path = output_path or str(SEARCH_INDEX_PATH)
+
+    if not docs_path.exists():
+        print(f"Error: {docs_path} not found. Run preprocess.py first.")
+        return
+
+    with open(docs_path, encoding="utf-8") as f:
+        docs = json.load(f)
+
+    print(f"Building search index from {len(docs)} documents...")
+    engine = LegalSearchEngine()
+
+    for i, doc in enumerate(docs):
+        content = doc.get("content", doc.get("segmented_content", ""))
+        if not content:
+            content = doc.get("text", "")
+        content = clean_vietnamese(content)
+
+        metadata = {
+            "title": doc.get("title", ""),
+            "type": doc.get("type", ""),
+            "law_number": doc.get("law_number", ""),
+            "issuer": doc.get("issuer", ""),
+        }
+        if content:
+            engine.add_document(content, metadata)
+            if (i + 1) % 1000 == 0:
+                print(f"  Indexed {i + 1}/{len(docs)} documents...")
+
+    engine.build()
+    print(f"  Index: {engine.index.vocabulary_size} terms, {engine.index.doc_count} documents")
+    print(f"  Avg doc length: {engine.index.avg_doc_length:.1f} terms")
+
+    # Save index
+    engine.index.save(output_path)
+    print(f"Search index saved → {output_path}")
+
+    return engine
+
+
+def build_knowledge_graph(docs_path: str = None, output_path: str = None):
+    """Build knowledge graph from processed legal documents."""
+    docs_path = Path(docs_path or PROCESSED_DIR / "legal_docs.json")
+    output_path = output_path or str(KG_PATH)
+
+    if not docs_path.exists():
+        print(f"Error: {docs_path} not found. Run preprocess.py first.")
+        return
+
+    with open(docs_path, encoding="utf-8") as f:
+        docs = json.load(f)
+
+    print(f"Building knowledge graph from {len(docs)} documents...")
+    kg = LegalKnowledgeGraph()
+
+    for i, doc in enumerate(docs):
+        kg.add_document(doc)
+        if (i + 1) % 500 == 0:
+            print(f"  Processed {i + 1}/{len(docs)} documents...")
+
+    stats = kg.get_stats()
+    print(f"  Nodes: {stats['nodes']}")
+    print(f"  Edges: {stats['edges']}")
+    print(f"  Node types: {stats['node_types']}")
+    print(f"  Relation types: {stats['relation_types']}")
+
+    kg.save(output_path)
+    return kg
+
+
+if __name__ == "__main__":
+    print("=" * 60)
+    print("Building search index...")
+    print("=" * 60)
+    build_search_index()
+
+    print("\n" + "=" * 60)
+    print("Building knowledge graph...")
+    print("=" * 60)
+    build_knowledge_graph()
+</file>
+
+<file path="scripts/download_data.py">
+"""Download legal data from legal-ai-agent repository."""
+
+import json
+import urllib.request
+from pathlib import Path
+
+from src.common.config import RAW_DIR, QA_DATA_PATH, LEGAL_DATA_PATH
+
+
+URLS = {
+    "yuiTC_sample.json": "https://github.com/Paparusi/legal-ai-agent/raw/main/data/yuiTC_sample.json",
+    "uts_vlc_processed.json": "https://github.com/Paparusi/legal-ai-agent/raw/main/data/uts_vlc_processed.json",
+}
+
+
+def download_file(url: str, dest: Path, desc: str = ""):
+    """Download a file with progress display."""
+    print(f"Downloading {desc or dest.name}...")
+    urllib.request.urlretrieve(url, str(dest))
+    size_mb = dest.stat().st_size / (1024 * 1024)
+    print(f"  Done: {size_mb:.1f} MB -> {dest}")
+
+
+def main():
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+
+    for filename, url in URLS.items():
+        dest = RAW_DIR / filename
+        if dest.exists():
+            print(f"Already exists: {dest}")
+            continue
+        download_file(url, dest, filename)
+
+    # Verify
+    print("\n--- Verification ---")
+    for filename in URLS:
+        dest = RAW_DIR / filename
+        if dest.exists():
+            if filename.endswith(".json"):
+                with open(dest, encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict) and "count" in data:
+                    print(f"  {filename}: {data['count']} entries")
+                elif isinstance(data, list):
+                    print(f"  {filename}: {len(data)} entries")
+                else:
+                    print(f"  {filename}: loaded OK")
+            else:
+                print(f"  {filename}: {dest.stat().st_size / 1024:.0f} KB")
+        else:
+            print(f"  {filename}: MISSING")
+
+
+if __name__ == "__main__":
+    main()
+</file>
+
+<file path="scripts/generate_qa_dataset_v2.py">
+"""Generate expanded QA dataset from parsed law text with paraphrasing.
+
+Output: data/processed/qa_ke_toan_train_v2.json
+"""
+
+import json
+import random
+import re
+from pathlib import Path
+from typing import Optional
+
+from src.common.config import INTENT_LABELS, NER_LABELS
+
+
+def build_question_templates():
+    """Expanded templates for generating diverse questions."""
+    return {
+        "hoi_dieu_khoan": [
+            "Điều {id} Luật Kế toán quy định gì về {title}?",
+            "Nội dung của Điều {id} về {title} là gì?",
+            "Theo Điều {id} Luật Kế toán, {title}?",
+            "Luật Kế toán quy định như thế nào về {title} tại Điều {id}?",
+            "Điều {id} nói gì về {title}?",
+            "Quy định tại Điều {id} về {title} là gì?",
+            "Điều {id} của Luật Kế toán có nội dung gì?",
+            "Theo Điều {id} của Luật Kế toán thì {title}?",
+            "Nội dung chính của Điều {id} về {title}?",
+            "Điều {id} Luật Kế toán quy định về {title} như thế nào?",
+            "Điều {id} trong Luật Kế toán nêu rõ điều gì về {title}?",
+            "Theo quy định tại Điều {id} Luật Kế toán thì {title}?",
+            "Điều {id} Luật Kế toán có quy định gì liên quan đến {title}?",
+            "Những quy định về {title} được nêu tại Điều {id} là gì?",
+            "Theo Luật Kế toán tại Điều {id}, {title}?",
+        ],
+        "hoi_dinh_nghia": [
+            "{title} được hiểu như thế nào theo Luật Kế toán?",
+            "Điều {id} định nghĩa {title} là gì?",
+            "Khái niệm {title} theo Luật Kế toán Điều {id}?",
+            "{title} theo Luật Kế toán có nghĩa là gì?",
+            "Định nghĩa về {title} được quy định tại Điều {id}?",
+            "{title} được định nghĩa như thế nào trong Luật Kế toán?",
+            "Theo Điều {id} Luật Kế toán, {title} là gì?",
+            "Luật Kế toán quy định {title} có nghĩa là gì?",
+            "Như thế nào được coi là {title} theo Luật Kế toán?",
+            "{title} được hiểu là gì trong Luật Kế toán Điều {id}?",
+            "Khái niệm {title} được định nghĩa ra sao tại Điều {id}?",
+            "Theo Điều {id}, {title} được hiểu như sau?",
+            "{title} có định nghĩa gì theo Luật Kế toán?",
+            "Điều {id} giải thích {title} như thế nào?",
+        ],
+        "hoi_doi_tuong": [
+            "Đối tượng áp dụng của {title} được quy định tại Điều {id}?",
+            "Điều {id} quy định đối tượng nào?",
+            "Ai là đối tượng của {title} theo Điều {id}?",
+            "Những ai phải tuân thủ quy định về {title} tại Điều {id}?",
+            "Đối tượng nào chịu sự điều chỉnh của {title} theo Điều {id}?",
+            "Quy định tại Điều {id} áp dụng cho đối tượng nào?",
+            "Ai phải thực hiện quy định về {title} tại Điều {id}?",
+            "Đối tượng chịu trách nhiệm về {title} theo Điều {id} là ai?",
+            "Những đối tượng nào liên quan đến {title} theo Điều {id}?",
+            "Điều {id} quy định đối tượng áp dụng của {title} là gì?",
+            "Các đối tượng thuộc phạm vi điều chỉnh của {title} tại Điều {id}?",
+            "Theo Điều {id}, {title} áp dụng cho ai?",
+            "Ai là người phải tuân thủ {title} theo Luật Kế toán Điều {id}?",
+            "Đối tượng của quy định {title} tại Điều {id}?",
+        ],
+        "hoi_quyen_loi": [
+            "Quyền lợi về {title} được quy định như thế nào tại Điều {id}?",
+            "Điều {id} bảo vệ quyền lợi gì?",
+            "Theo Điều {id}, quyền lợi về {title} là gì?",
+            "Người lao động có quyền lợi gì về {title} tại Điều {id}?",
+            "Quyền lợi liên quan đến {title} được quy định tại Điều {id}?",
+            "Theo Luật Kế toán Điều {id}, quyền lợi về {title} gồm những gì?",
+            "Điều {id} quy định quyền lợi nào về {title}?",
+            "Những quyền lợi nào được đảm bảo trong {title} tại Điều {id}?",
+            "Quyền lợi của đối tượng về {title} theo Điều {id} là gì?",
+            "{title} tại Điều {id} đảm bảo quyền lợi gì?",
+            "Điều {id} bảo đảm quyền lợi về {title} như thế nào?",
+            "Quyền lợi hợp pháp về {title} theo Luật Kế toán Điều {id}?",
+            "Theo Điều {id}, đối tượng có quyền lợi gì về {title}?",
+        ],
+        "hoi_nghia_vu": [
+            "Nghĩa vụ về {title} theo Điều {id} Luật Kế toán?",
+            "Điều {id} quy định nghĩa vụ gì về {title}?",
+            "Theo Luật Kế toán Điều {id}, nghĩa vụ {title} là gì?",
+            "Nghĩa vụ của người lao động về {title} tại Điều {id}?",
+            "Những nghĩa vụ nào về {title} được quy định tại Điều {id}?",
+            "Điều {id} quy định trách nhiệm gì về {title}?",
+            "Nghĩa vụ phải thực hiện về {title} theo Điều {id}?",
+            "Theo Luật Kế toán tại Điều {id}, nghĩa vụ về {title} là gì?",
+            "Đối tượng có nghĩa vụ gì về {title} theo Điều {id}?",
+            "Nghĩa vụ bắt buộc về {title} được quy định tại Điều {id}?",
+            "Điều {id} yêu cầu thực hiện nghĩa vụ gì về {title}?",
+            "Trách nhiệm và nghĩa vụ về {title} theo Điều {id}?",
+            "Theo Điều {id}, nghĩa vụ của đối tượng về {title} là gì?",
+        ],
+        "hoi_thu_tuc": [
+            "Thủ tục về {title} được quy định tại Điều {id} như thế nào?",
+            "Điều {id} quy định thủ tục gì?",
+            "Theo Luật Kế toán, thủ tục {title} tại Điều {id} là gì?",
+            "Quy trình thực hiện {title} theo Điều {id} Luật Kế toán?",
+            "Thủ tục thực hiện {title} được quy định tại Điều {id}?",
+            "Các bước thủ tục về {title} theo Luật Kế toán Điều {id}?",
+            "Điều {id} quy định quy trình {title} như thế nào?",
+            "Thủ tục hành chính về {title} tại Điều {id}?",
+            "Thực hiện {title} cần những thủ tục gì theo Điều {id}?",
+            "Theo Điều {id}, thủ tục về {title} gồm các bước nào?",
+            "Quy định về thủ tục {title} tại Điều {id} Luật Kế toán?",
+            "Trình tự thực hiện {title} theo Luật Kế toán Điều {id}?",
+            "Thủ tục cần tuân thủ khi thực hiện {title} tại Điều {id}?",
+        ],
+        "hoi_thoi_han": [
+            "Thời hạn về {title} theo Điều {id} Luật Kế toán là bao lâu?",
+            "Điều {id} quy định thời hạn như thế nào?",
+            "Thời hạn của {title} được quy định tại Điều {id}?",
+            "Thời gian thực hiện {title} theo Điều {id} là bao lâu?",
+            "Kỳ hạn về {title} được quy định tại Điều {id}?",
+            "Thời hạn hoàn thành {title} theo Luật Kế toán Điều {id}?",
+            "Điều {id} quy định thời gian {title} là bao nhiêu?",
+            "Thời hạn áp dụng cho {title} tại Điều {id}?",
+            "Mốc thời gian về {title} theo Điều {id} Luật Kế toán?",
+            "Theo Điều {id}, thời hạn {title} được quy định ra sao?",
+            "Thời gian hiệu lực của {title} tại Điều {id}?",
+            "Thời hạn thực hiện nghĩa vụ {title} theo Điều {id}?",
+        ],
+        "hoi_hieu_luc": [
+            "{title} có hiệu lực từ khi nào theo Điều {id}?",
+            "Điều {id} quy định hiệu lực của {title} như thế nào?",
+            "Thời điểm có hiệu lực của {title} tại Điều {id}?",
+            "{title} được áp dụng từ bao giờ theo Luật Kế toán?",
+            "Hiệu lực thi hành của {title} theo Điều {id} Luật Kế toán?",
+            "Điều {id} quy định thời điểm có hiệu lực của {title}?",
+            "Từ khi nào {title} có hiệu lực theo Luật Kế toán?",
+            "Thời gian bắt đầu hiệu lực của {title} tại Điều {id}?",
+        ],
+        "hoi_hinh_phat": [
+            "Hình phạt/Chế tài vi phạm {title} được quy định tại Điều {id}?",
+            "Điều {id} quy định chế tài nào cho {title}?",
+            "Xử phạt vi phạm {title} theo Luật Kế toán Điều {id}?",
+            "Hậu quả pháp lý khi vi phạm {title} tại Điều {id}?",
+            "Chế tài xử lý vi phạm {title} theo Điều {id}?",
+            "Mức phạt cho hành vi vi phạm {title} tại Điều {id}?",
+            "Trách nhiệm pháp lý về {title} được quy định tại Điều {id}?",
+        ],
+        "hoi_sua_doi": [
+            "Điều {id} có quy định sửa đổi, bổ sung gì về {title}?",
+            "Nội dung sửa đổi {title} tại Điều {id}?",
+            "Thay đổi về {title} được quy định tại Điều {id}?",
+            "Điều {id} sửa đổi, bổ sung những gì về {title}?",
+            "Quy định mới về {title} tại Điều {id} Luật Kế toán?",
+            "Những điểm mới về {title} theo Điều {id}?",
+        ],
+    }
+
+
+def detect_intent(title: str, content: str = "") -> str:
+    """Detect intent from article title and content using keyword matching."""
+    text = (title + " " + content).lower()
+
+    # Priority order: specific → general
+    if any(k in text for k in ["giải thích từ ngữ", "định nghĩa", "khái niệm", "hiểu là", "được hiểu là"]):
+        return "hoi_dinh_nghia"
+    if any(k in text for k in ["đối tượng áp dụng", "phạm vi điều chỉnh", "áp dụng cho"]):
+        return "hoi_doi_tuong"
+    if any(k in text for k in ["quyền", "được quyền", "quyền lợi", "được hưởng", "được phép", "benefit"]):
+        return "hoi_quyen_loi"
+    if any(k in text for k in ["nghĩa vụ", "trách nhiệm", "bắt buộc phải", "phải có", "phải thực hiện", "nộp", "báo cáo"]):
+        return "hoi_nghia_vu"
+    if any(k in text for k in ["thủ tục", "trình tự", "quy trình", "các bước", "thực hiện", "hồ sơ", "chứng từ", "procedure"]):
+        return "hoi_thu_tuc"
+    if any(k in text for k in ["thời hạn", "thời hiệu", "kỳ hạn", "thời gian", "thời điểm", "deadline", "hiệu lực"]):
+        return "hoi_thoi_han"
+    if any(k in text for k in ["sửa đổi", "bổ sung", "thay thế", "điều chỉnh", "bãi bỏ"]):
+        return "hoi_sua_doi"
+    if any(k in text for k in ["vi phạm", "xử phạt", "chế tài", "trách nhiệm pháp lý", "hình phạt", "cấm", "xử lý"]):
+        return "hoi_hinh_phat"
+    if any(k in text for k in ["hiệu lực", "có hiệu lực", "thi hành", "áp dụng từ"]):
+        return "hoi_hieu_luc"
+    return "hoi_dieu_khoan"
+
+
+def synonym_replace(text: str) -> str:
+    """Simple synonym replacement for Vietnamese legal text."""
+    synonyms = {
+        "quy định": ["quy định", "nêu rõ", "đưa ra", "đặt ra"],
+        "như thế nào": ["như thế nào", "ra sao", "thế nào"],
+        "là gì": ["là gì", "có nghĩa là gì", "được hiểu là gì"],
+        "bao lâu": ["bao lâu", "trong bao lâu", "bao nhiêu lâu"],
+        "được": ["được", "có quyền"],
+        "phải": ["phải", "bắt buộc", "có nghĩa vụ"],
+        "gồm": ["gồm", "bao gồm", "có những"],
+        "ai": ["ai", "đối tượng nào", "cá nhân/tổ chức nào"],
+    }
+    for key, reps in synonyms.items():
+        if key in text:
+            text = text.replace(key, random.choice(reps), 1)
+    return text
+
+
+def generate_questions(dieu_id: str, title: str, content: str, templates: dict, max_per_article: int = 12) -> list[dict]:
+    """Generate question variants for an article."""
+    intent = detect_intent(title, content)
+    template_list = templates.get(intent, templates["hoi_dieu_khoan"])
+
+    # Use all templates + synonym variants
+    questions = []
+    for t in template_list:
+        q = t.format(id=dieu_id, title=title.lower())
+        questions.append({"question": q, "intent": intent})
+        # Add synonym variant
+        q2 = synonym_replace(q)
+        if q2 != q:
+            questions.append({"question": q2, "intent": intent})
+
+    # Limit to max_per_article, but ensure at least min(5, len(questions))
+    if len(questions) > max_per_article:
+        questions = random.sample(questions, max_per_article)
+
+    return questions
+
+
+def extract_entities(text: str) -> list[dict]:
+    """Extract legal entities from text using regex patterns."""
+    patterns = {
+        "LUAT": r"Luật\s+([\w\s]+?)(?:\s+số|\s+năm|\d{4}|$)",
+        "THONG_TU": r"Thông\s+tư\s+(?:số\s+)?([\d/]+(?:/TT-\w+)?)",
+        "NGHI_DINH": r"Nghị\s+định\s+(?:số\s+)?([\d/]+(?:/NĐ-CP)?)",
+        "DIEU": r"Điều\s+(\d+)",
+        "KHOAN": r"khoản\s+(\d+)",
+        "DIEM": r"điểm\s+([a-zđ]+)",
+        "CO_QUAN": r"(?:Bộ\s+\w+|Ngân\s+hàng\s+\w+|Quốc\s+hội|Chính\s+phủ|UBND)\s*(?:\w*\s*\w*)?",
+        "NGAY_THANG": r"\d{1,2}\s+tháng\s+\d{1,2}\s+năm\s+\d{4}",
+    }
+    entities = []
+    for etype, pattern in patterns.items():
+        for match in re.finditer(pattern, text, re.IGNORECASE):
+            entities.append({
+                "entity": etype,
+                "text": match.group(0),
+                "start": match.start(),
+                "end": match.end(),
+            })
+    entities.sort(key=lambda x: x["start"])
+    return entities
+
+
+def build_ner_labels(text: str, entities: list[dict]) -> list[str]:
+    """Build BIO tags for NER training."""
+    tokens = text.split()
+    labels = ["O"] * len(tokens)
+    char_to_token = {}
+    pos = 0
+    for i, token in enumerate(tokens):
+        for j in range(len(token)):
+            char_to_token[pos + j] = i
+        char_to_token[pos + len(token)] = i
+        pos += len(token) + 1
+
+    for ent in entities:
+        start_char = ent["start"]
+        end_char = ent["end"]
+        start_token = char_to_token.get(start_char)
+        end_token = None
+        for c in range(end_char - 1, start_char, -1):
+            if c in char_to_token:
+                end_token = char_to_token[c]
+                break
+        if start_token is not None and end_token is not None:
+            labels[start_token] = f"B-{ent['entity']}"
+            for t in range(start_token + 1, end_token + 1):
+                if labels[t] == "O":
+                    labels[t] = f"I-{ent['entity']}"
+    return labels
+
+
+def build_answer(dieu: dict) -> str:
+    """Build answer text from article content."""
+    parts = []
+    if dieu.get("content"):
+        parts.append(dieu["content"])
+    for k in dieu.get("khoans", []):
+        parts.append(f"{k['id']}. {k['content']}")
+        for di in k.get("diems", []):
+            parts.append(f"  {di['id']}) {di['content']}")
+    return "\n".join(parts)
+
+
+def generate_dataset(structured_path: Path, output_path: Path, max_pairs: Optional[int] = None):
+    """Generate expanded QA dataset from structured law."""
+    with open(structured_path, encoding="utf-8") as f:
+        data = json.load(f)
+
+    templates = build_question_templates()
+    dataset = []
+    qa_id = 0
+
+    for ch in data:
+        for dieu in ch.get("dieus", []):
+            dieu_id = dieu["id"]
+            title = dieu["title"]
+            answer_text = build_answer(dieu)
+            entities = extract_entities(answer_text)
+            ner_labels = build_ner_labels(answer_text, entities)
+
+            questions = generate_questions(dieu_id, title, answer_text, templates)
+            for q in questions:
+                dataset.append({
+                    "id": qa_id,
+                    "question": q["question"],
+                    "intent": q["intent"],
+                    "answer": answer_text,
+                    "entities": entities,
+                    "ner_labels": ner_labels,
+                    "source": f"Điều {dieu_id} - {title}",
+                })
+                qa_id += 1
+                if max_pairs and len(dataset) >= max_pairs:
+                    break
+            if max_pairs and len(dataset) >= max_pairs:
+                break
+        if max_pairs and len(dataset) >= max_pairs:
+            break
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(dataset, f, ensure_ascii=False, indent=2)
+
+    print(f"Generated {len(dataset)} QA pairs")
+    intent_counts = {}
+    for d in dataset:
+        intent_counts[d["intent"]] = intent_counts.get(d["intent"], 0) + 1
+    print("Intent distribution:")
+    for intent, count in sorted(intent_counts.items(), key=lambda x: -x[1]):
+        pct = count / len(dataset) * 100
+        print(f"  {intent}: {count} ({pct:.1f}%)")
+    print(f"Saved → {output_path}")
+
+
+def main():
+    structured = Path("data/processed/luat_ke_toan_2025_structured.json")
+    output = Path("data/processed/qa_ke_toan_train_v2.json")
+    generate_dataset(structured, output)
+
+
+if __name__ == "__main__":
+    main()
+</file>
+
+<file path="scripts/generate_qa_dataset.py">
+"""Generate QA dataset automatically from parsed law text.
+
+Creates question-answer pairs with intent labels and NER BIO tags.
+Output: data/processed/qa_ke_toan_train.json
+"""
+
+import json
+import random
+import re
+from pathlib import Path
+from typing import Optional
+
+from src.common.config import INTENT_LABELS, ENTITY_TYPES, NER_LABELS
+
+
+def build_question_templates():
+    """Return templates for generating questions from article titles."""
+    return {
+        "default": [
+            "Điều {id} Luật Kế toán quy định gì về {title}?",
+            "Nội dung của Điều {id} về {title} là gì?",
+            "Theo Điều {id} Luật Kế toán, {title}?",
+            "Luật Kế toán quy định như thế nào về {title} tại Điều {id}?",
+            "Điều {id} nói gì về {title}?",
+        ],
+        "dinh_nghia": [
+            "{title} được hiểu như thế nào theo Luật Kế toán?",
+            "Điều {id} định nghĩa {title} là gì?",
+            "Khái niệm {title} theo Luật Kế toán Điều {id}?",
+        ],
+        "doi_tuong": [
+            "Đối tượng áp dụng của {title} được quy định tại Điều {id}?",
+            "Điều {id} quy định đối tượng nào?",
+            "Ai là đối tượng của {title} theo Điều {id}?",
+        ],
+        "quyen_loi": [
+            "Quyền lợi về {title} được quy định như thế nào tại Điều {id}?",
+            "Điều {id} bảo vệ quyền lợi gì?",
+            "Theo Điều {id}, quyền lợi về {title} là gì?",
+        ],
+        "nghia_vu": [
+            "Nghĩa vụ về {title} theo Điều {id} Luật Kế toán?",
+            "Điều {id} quy định nghĩa vụ gì về {title}?",
+            "Theo Luật Kế toán Điều {id}, nghĩa vụ {title} là gì?",
+        ],
+        "thu_tuc": [
+            "Thủ tục về {title} được quy định tại Điều {id} như thế nào?",
+            "Điều {id} quy định thủ tục gì?",
+            "Theo Luật Kế toán, thủ tục {title} tại Điều {id} là gì?",
+        ],
+        "thoi_han": [
+            "Thời hạn về {title} theo Điều {id} Luật Kế toán là bao lâu?",
+            "Điều {id} quy định thời hạn như thế nào?",
+            "Thời hạn của {title} được quy định tại Điều {id}?",
+        ],
+    }
+
+
+def detect_intent(title: str) -> str:
+    """Detect intent from article title using keyword matching."""
+    title_lower = title.lower()
+    if any(k in title_lower for k in ["giải thích", "định nghĩa", "khái niệm", "hiểu là"]):
+        return "hoi_dinh_nghia"
+    if any(k in title_lower for k in ["đối tượng", "áp dụng", "phạm vi", "subject"]):
+        return "hoi_doi_tuong"
+    if any(k in title_lower for k in ["quyền", "quyền lợi", "được quyền", "benefit", "right"]):
+        return "hoi_quyen_loi"
+    if any(k in title_lower for k in ["nghĩa vụ", "trách nhiệm", "bắt buộc", "phải", "obligation"]):
+        return "hoi_nghia_vu"
+    if any(k in title_lower for k in ["thủ tục", "trình tự", "quy trình", "procedure", "process"]):
+        return "hoi_thu_tuc"
+    if any(k in title_lower for k in ["thời hạn", "thời hiệu", "kỳ hạn", "deadline", "time limit"]):
+        return "hoi_thoi_han"
+    return "hoi_dieu_khoan"
+
+
+def generate_questions(dieu_id: str, title: str, templates: dict) -> list[dict]:
+    """Generate 3-5 question variants for an article."""
+    intent = detect_intent(title)
+    template_list = templates.get(intent, templates["default"])
+    num_questions = min(random.randint(3, 5), len(template_list))
+    selected = random.sample(template_list, num_questions)
+    questions = []
+    for t in selected:
+        q = t.format(id=dieu_id, title=title.lower())
+        questions.append({"question": q, "intent": intent})
+    return questions
+
+
+def extract_entities(text: str) -> list[dict]:
+    """Extract legal entities from text using regex patterns."""
+    patterns = {
+        "LUAT": r"Luật\s+([\w\s]+?)(?:\s+số|\s+năm|\d{4}|$)",
+        "THONG_TU": r"Thông\s+tư\s+(?:số\s+)?([\d/]+(?:/TT-\w+)?)",
+        "NGHI_DINH": r"Nghị\s+định\s+(?:số\s+)?([\d/]+(?:/NĐ-CP)?)",
+        "DIEU": r"Điều\s+(\d+)",
+        "KHOAN": r"khoản\s+(\d+)",
+        "DIEM": r"điểm\s+([a-zđ]+)",
+        "CO_QUAN": r"(?:Bộ\s+\w+|Ngân\s+hàng\s+\w+|Quốc\s+hội|Chính\s+phủ|UBND)\s*(?:\w*\s*\w*)?",
+        "NGAY_THANG": r"\d{1,2}\s+tháng\s+\d{1,2}\s+năm\s+\d{4}",
+    }
+    entities = []
+    for etype, pattern in patterns.items():
+        for match in re.finditer(pattern, text, re.IGNORECASE):
+            entities.append({
+                "entity": etype,
+                "text": match.group(0),
+                "start": match.start(),
+                "end": match.end(),
+            })
+    entities.sort(key=lambda x: x["start"])
+    return entities
+
+
+def build_ner_labels(text: str, entities: list[dict]) -> list[str]:
+    """Build BIO tags for NER training."""
+    tokens = text.split()
+    labels = ["O"] * len(tokens)
+    char_to_token = {}
+    pos = 0
+    for i, token in enumerate(tokens):
+        for j in range(len(token)):
+            char_to_token[pos + j] = i
+        char_to_token[pos + len(token)] = i
+        pos += len(token) + 1
+
+    for ent in entities:
+        start_char = ent["start"]
+        end_char = ent["end"]
+        start_token = char_to_token.get(start_char)
+        end_token = None
+        for c in range(end_char - 1, start_char, -1):
+            if c in char_to_token:
+                end_token = char_to_token[c]
+                break
+        if start_token is not None and end_token is not None:
+            labels[start_token] = f"B-{ent['entity']}"
+            for t in range(start_token + 1, end_token + 1):
+                if labels[t] == "O":
+                    labels[t] = f"I-{ent['entity']}"
+    return labels
+
+
+def build_answer(dieu: dict) -> str:
+    """Build answer text from article content."""
+    parts = []
+    if dieu.get("content"):
+        parts.append(dieu["content"])
+    for k in dieu.get("khoans", []):
+        parts.append(f"{k['id']}. {k['content']}")
+        for di in k.get("diems", []):
+            parts.append(f"  {di['id']}) {di['content']}")
+    return "\n".join(parts)
+
+
+def generate_dataset(structured_path: Path, output_path: Path, max_pairs: Optional[int] = None):
+    """Generate full QA dataset from structured law."""
+    with open(structured_path, encoding="utf-8") as f:
+        data = json.load(f)
+
+    templates = build_question_templates()
+    dataset = []
+    qa_id = 0
+
+    for ch in data:
+        for dieu in ch.get("dieus", []):
+            dieu_id = dieu["id"]
+            title = dieu["title"]
+            answer_text = build_answer(dieu)
+            entities = extract_entities(answer_text)
+            ner_labels = build_ner_labels(answer_text, entities)
+
+            questions = generate_questions(dieu_id, title, templates)
+            for q in questions:
+                dataset.append({
+                    "id": qa_id,
+                    "question": q["question"],
+                    "intent": q["intent"],
+                    "answer": answer_text,
+                    "entities": entities,
+                    "ner_labels": ner_labels,
+                    "source": f"Điều {dieu_id} - {title}",
+                })
+                qa_id += 1
+                if max_pairs and len(dataset) >= max_pairs:
+                    break
+            if max_pairs and len(dataset) >= max_pairs:
+                break
+        if max_pairs and len(dataset) >= max_pairs:
+            break
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(dataset, f, ensure_ascii=False, indent=2)
+
+    print(f"Generated {len(dataset)} QA pairs")
+    intent_counts = {}
+    for d in dataset:
+        intent_counts[d["intent"]] = intent_counts.get(d["intent"], 0) + 1
+    print("Intent distribution:")
+    for intent, count in sorted(intent_counts.items(), key=lambda x: -x[1]):
+        print(f"  {intent}: {count}")
+    print(f"Saved → {output_path}")
+
+
+def main():
+    structured = Path("data/processed/luat_ke_toan_2025_structured.json")
+    output = Path("data/processed/qa_ke_toan_train.json")
+    generate_dataset(structured, output)
+
+
+if __name__ == "__main__":
+    main()
+</file>
+
+<file path="scripts/inference_lora.py">
+"""Inference script for LoRA PhoBERT trained on Luật Kế toán 2025.
+
+Usage:
+    PYTHONPATH=/path/to/legal-ai:$PYTHONPATH python scripts/inference_lora.py
+
+Interactive mode: python scripts/inference_lora.py --interactive
+"""
+
+import argparse
+import json
+import torch
+from pathlib import Path
+from transformers import AutoTokenizer
+
+from src.common.config import (
+    PHOBERT_MODEL, MAX_SEQ_LENGTH, INTENT_LABELS, NER_LABELS,
+)
+from src.chatbot.intent_classifier import PhoBERTIntentClassifier
+from src.chatbot.ner_tagger import PhoBERTNERTagger
+
+
+def load_trained_model(checkpoint_path: str, device: str = "cpu"):
+    """Load trained LoRA checkpoint and build models."""
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+
+    tokenizer = AutoTokenizer.from_pretrained(PHOBERT_MODEL)
+
+    # Load intent classifier
+    intent_model = PhoBERTIntentClassifier()
+    intent_state = {k.replace("intent_classifier.", ""): v
+                    for k, v in checkpoint["model_state_dict"].items()
+                    if k.startswith("intent_classifier.")}
+    phobert_state = {k.replace("phobert.", ""): v
+                     for k, v in checkpoint["model_state_dict"].items()
+                     if k.startswith("phobert.")}
+    intent_model.phobert.load_state_dict(phobert_state, strict=False)
+    intent_model.classifier.load_state_dict(intent_state, strict=False)
+    intent_model.to(device)
+    intent_model.eval()
+
+    # Load NER tagger
+    ner_model = PhoBERTNERTagger()
+    ner_state = {k.replace("ner_classifier.", ""): v
+                 for k, v in checkpoint["model_state_dict"].items()
+                 if k.startswith("ner_classifier.")}
+    ner_model.phobert.load_state_dict(phobert_state, strict=False)
+    ner_model.classifier.load_state_dict(ner_state, strict=False)
+    ner_model.to(device)
+    ner_model.eval()
+
+    intent_label2id = checkpoint.get("intent_label2id", {l: i for i, l in enumerate(INTENT_LABELS)})
+    intent_id2label = {v: k for k, v in intent_label2id.items()}
+    ner_label2id = checkpoint.get("ner_label2id", {l: i for i, l in enumerate(NER_LABELS)})
+    ner_id2label = {v: k for k, v in ner_label2id.items()}
+
+    return tokenizer, intent_model, ner_model, intent_id2label, ner_id2label
+
+
+def predict_intent(text: str, tokenizer, model, intent_id2label, device="cpu"):
+    """Predict intent for a question."""
+    model.eval()
+    encoding = tokenizer(
+        text, max_length=MAX_SEQ_LENGTH, truncation=True,
+        padding="max_length", return_tensors="pt"
+    )
+    input_ids = encoding["input_ids"].to(device)
+    attention_mask = encoding["attention_mask"].to(device)
+
+    with torch.no_grad():
+        outputs = model.phobert(input_ids=input_ids, attention_mask=attention_mask)
+        cls_output = outputs.last_hidden_state[:, 0, :]
+        logits = model.classifier(cls_output)
+        probs = torch.softmax(logits, dim=-1)
+        pred_idx = torch.argmax(probs, dim=-1).item()
+        confidence = probs[0, pred_idx].item()
+
+    return {
+        "intent": intent_id2label.get(pred_idx, "unknown"),
+        "confidence": round(confidence, 4),
+        "top3": sorted(
+            [(intent_id2label.get(i, "unknown"), probs[0, i].item()) for i in range(len(intent_id2label))],
+            key=lambda x: -x[1]
+        )[:3]
+    }
+
+
+def predict_ner(text: str, tokenizer, model, ner_id2label, device="cpu"):
+    """Predict NER tags for a question."""
+    model.eval()
+    encoding = tokenizer(
+        text, max_length=MAX_SEQ_LENGTH, truncation=True,
+        padding="max_length", return_tensors="pt"
+    )
+    input_ids = encoding["input_ids"].to(device)
+    attention_mask = encoding["attention_mask"].to(device)
+
+    with torch.no_grad():
+        outputs = model.phobert(input_ids=input_ids, attention_mask=attention_mask)
+        logits = model.classifier(outputs.last_hidden_state)
+        preds = torch.argmax(logits, dim=-1).squeeze(0).cpu().tolist()
+
+    tokens = tokenizer.convert_ids_to_tokens(input_ids.squeeze(0).cpu().tolist())
+    entities = []
+    current_entity = None
+    for token, pred_id in zip(tokens, preds):
+        if token in ("", "[CLS]", "[SEP]", "<pad>"):
+            if current_entity:
+                entities.append(current_entity)
+                current_entity = None
+            continue
+        label = ner_id2label.get(pred_id, "O")
+        if label == "O":
+            if current_entity:
+                entities.append(current_entity)
+                current_entity = None
+        elif label.startswith("B-"):
+            if current_entity:
+                entities.append(current_entity)
+            current_entity = {"entity": label[2:], "text": token.replace("Ġ", ""), "tokens": [token]}
+        elif label.startswith("I-") and current_entity and current_entity["entity"] == label[2:]:
+            current_entity["tokens"].append(token)
+            current_entity["text"] += token.replace("Ġ", " ")
+        else:
+            if current_entity:
+                entities.append(current_entity)
+                current_entity = None
+
+    if current_entity:
+        entities.append(current_entity)
+
+    # Clean up entity text and filter short noise
+    cleaned = []
+    for e in entities:
+        text_clean = e["text"].strip().replace("Ġ", " ").strip()
+        if len(text_clean) > 1:
+            cleaned.append({"entity": e["entity"], "text": text_clean})
+
+    return cleaned
+
+
+def search_answer(question: str, qa_dataset_path: str, top_k: int = 3):
+    """Simple keyword-based answer retrieval from QA dataset."""
+    with open(qa_dataset_path, encoding="utf-8") as f:
+        data = json.load(f)
+
+    keywords = set(question.lower().split())
+    scored = []
+    for item in data:
+        q_words = set(item["question"].lower().split())
+        score = len(keywords & q_words) / max(len(keywords), 1)
+        scored.append((score, item))
+
+    scored.sort(key=lambda x: -x[0])
+    return [item for _, item in scored[:top_k]]
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--interactive", "-i", action="store_true", help="Interactive mode")
+    parser.add_argument("--question", "-q", type=str, help="Single question")
+    parser.add_argument("--checkpoint", default="data/models/lora_ke_toan/best_model.pt")
+    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    args = parser.parse_args()
+
+    print(f"Loading model from {args.checkpoint}...")
+    tokenizer, intent_model, ner_model, intent_id2label, ner_id2label = \
+        load_trained_model(args.checkpoint, args.device)
+    print("Model loaded. Ready for inference.\n")
+
+    qa_path = "data/processed/qa_ke_toan_train.json"
+
+    if args.interactive:
+        print("=== LegalAI LoRA Inference (Luật Kế toán 2025) ===")
+        print("Gõ câu hỏi hoặc 'exit' để thoát.\n")
+        while True:
+            try:
+                question = input("Hỏi: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                break
+            if question.lower() in ("exit", "quit", "q"):
+                break
+            if not question:
+                continue
+
+            intent_result = predict_intent(question, tokenizer, intent_model, intent_id2label, args.device)
+            ner_result = predict_ner(question, tokenizer, ner_model, ner_id2label, args.device)
+            answers = search_answer(question, qa_path)
+
+            print(f"\n  Intent: {intent_result['intent']} (conf: {intent_result['confidence']:.3f})")
+            print(f"  Top-3 intents: {[(l, round(p,3)) for l,p in intent_result['top3']]}")
+            print(f"  Entities: {[f'{e['entity']}:{e['text']}' for e in ner_result]}")
+            print(f"  Answer candidates:")
+            for i, ans in enumerate(answers[:2], 1):
+                print(f"    {i}. [{ans['source']}] {ans['answer'][:200]}...")
+            print()
+    elif args.question:
+        question = args.question
+        intent_result = predict_intent(question, tokenizer, intent_model, intent_id2label, args.device)
+        ner_result = predict_ner(question, tokenizer, ner_model, ner_id2label, args.device)
+        answers = search_answer(question, qa_path)
+
+        print(f"Question: {question}")
+        print(f"Intent: {intent_result['intent']} (confidence: {intent_result['confidence']:.3f})")
+        print(f"Top-3 intents: {intent_result['top3']}")
+        print(f"Entities: {ner_result}")
+        print(f"Answers:")
+        for i, ans in enumerate(answers[:3], 1):
+            print(f"  {i}. [{ans['source']}]")
+            print(f"     {ans['answer'][:300]}")
+    else:
+        # Demo with sample questions
+        demo_questions = [
+            "Điều 1 Luật Kế toán quy định gì về phạm vi điều chỉnh?",
+            "Đối tượng áp dụng của Luật Kế toán là ai?",
+            "Báo cáo tài chính được hiểu như thế nào?",
+            "Người làm kế toán có nghĩa vụ gì?",
+            "Thủ tục lập chứng từ kế toán như thế nào?",
+        ]
+        for q in demo_questions:
+            print(f"\n{'='*60}")
+            print(f"Q: {q}")
+            intent = predict_intent(q, tokenizer, intent_model, intent_id2label, args.device)
+            ner = predict_ner(q, tokenizer, ner_model, ner_id2label, args.device)
+            answers = search_answer(q, qa_path)
+            print(f"Intent: {intent['intent']} (conf: {intent['confidence']:.3f})")
+            print(f"NER: {[f'{e['entity']}:{e['text']}' for e in ner]}")
+            if answers:
+                ans = answers[0]
+                print(f"Answer: [{ans['source']}] {ans['answer'][:250]}...")
+
+
+if __name__ == "__main__":
+    main()
+</file>
+
+<file path="scripts/parse_luat_ke_toan.py">
+"""Parse Luật Kế toán 2025 into structured JSON hierarchy.
+
+Output: data/processed/luat_ke_toan_2025_structured.json
+Structure: Chương → Điều → Khoản → Điểm
+"""
+
+import json
+import re
+from pathlib import Path
+from dataclasses import dataclass, asdict
+from typing import Optional
+
+
+@dataclass
+class Diem:
+    id: str
+    content: str
+
+
+@dataclass
+class Khoan:
+    id: str
+    content: str
+    diems: list
+
+
+@dataclass
+class Dieu:
+    id: str
+    title: str
+    content: str
+    khoans: list
+
+
+@dataclass
+class Chuong:
+    id: str
+    title: str
+    dieus: list
+
+
+def parse_law(text: str) -> list:
+    lines = text.split("\n")
+    chapters = []
+    current_chuong = None
+    current_dieu = None
+    current_khoan = None
+    current_diem = None
+    buffer = []
+
+    def save_current_diem():
+        nonlocal current_diem, current_khoan
+        if current_diem and current_khoan:
+            current_khoan.diems.append(current_diem)
+            current_diem = None
+
+    def save_current_khoan():
+        nonlocal current_khoan, current_dieu
+        save_current_diem()
+        if current_khoan and current_dieu:
+            current_dieu.khoans.append(current_khoan)
+            current_khoan = None
+
+    def save_current_dieu():
+        nonlocal current_dieu, current_chuong
+        save_current_khoan()
+        if current_dieu and current_chuong:
+            current_chuong.dieus.append(current_dieu)
+            current_dieu = None
+
+    def save_current_chuong():
+        nonlocal current_chuong
+        save_current_dieu()
+        if current_chuong:
+            chapters.append(current_chuong)
+            current_chuong = None
+
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        if not line:
+            i += 1
+            continue
+
+        # Detect Chương
+        chuong_match = re.match(r"^Chương\s+([IVX0-9]+)$", line)
+        if chuong_match:
+            save_current_chuong()
+            title_lines = []
+            j = i + 1
+            while j < len(lines) and lines[j].strip() and not re.match(r"^(Chương\s|Điều\s|Mục\s|Phụ lục)", lines[j].strip()):
+                title_lines.append(lines[j].strip())
+                j += 1
+            chuong_title = " ".join(title_lines) if title_lines else ""
+            current_chuong = Chuong(
+                id=chuong_match.group(1),
+                title=chuong_title,
+                dieus=[]
+            )
+            i = j
+            continue
+
+        # Detect Mục (skip, treat as part of chapter)
+        muc_match = re.match(r"^Mục\s+([0-9]+)$", line)
+        if muc_match:
+            i += 1
+            continue
+
+        # Detect Điều
+        dieu_match = re.match(r"^Điều\s+([0-9]+)\.\s*(.+)$", line)
+        if dieu_match:
+            save_current_dieu()
+            dieu_id = dieu_match.group(1)
+            dieu_title = dieu_match.group(2).strip()
+            current_dieu = Dieu(
+                id=dieu_id,
+                title=dieu_title,
+                content="",
+                khoans=[]
+            )
+            i += 1
+            continue
+
+        # Detect Khoản
+        khoan_match = re.match(r"^([0-9]+)\.\s+(.+)$", line)
+        if khoan_match and current_dieu is not None:
+            save_current_khoan()
+            khoan_id = khoan_match.group(1)
+            khoan_text = khoan_match.group(2)
+            current_khoan = Khoan(
+                id=khoan_id,
+                content=khoan_text,
+                diems=[]
+            )
+            i += 1
+            continue
+
+        # Detect Điểm (a), b), đ), c), d)...)
+        diem_match = re.match(r"^([a-zđ])\)\s+(.+)$", line, re.IGNORECASE)
+        if diem_match and current_khoan is not None:
+            save_current_diem()
+            diem_id = diem_match.group(1).lower()
+            diem_text = diem_match.group(2)
+            current_diem = Diem(
+                id=diem_id,
+                content=diem_text
+            )
+            i += 1
+            continue
+
+        # Regular content
+        if current_diem is not None:
+            current_diem.content += " " + line
+        elif current_khoan is not None:
+            current_khoan.content += " " + line
+        elif current_dieu is not None:
+            if current_dieu.content:
+                current_dieu.content += " " + line
+            else:
+                current_dieu.content = line
+
+        i += 1
+
+    save_current_chuong()
+    return chapters
+
+
+def chapters_to_dict(chapters: list) -> list:
+    result = []
+    for ch in chapters:
+        ch_dict = {
+            "id": ch.id,
+            "title": ch.title,
+            "dieus": []
+        }
+        for d in ch.dieus:
+            dieu_dict = {
+                "id": d.id,
+                "title": d.title,
+                "content": d.content,
+                "khoans": []
+            }
+            for k in d.khoans:
+                khoan_dict = {
+                    "id": k.id,
+                    "content": k.content,
+                    "diems": [{"id": di.id, "content": di.content} for di in k.diems]
+                }
+                dieu_dict["khoans"].append(khoan_dict)
+            ch_dict["dieus"].append(dieu_dict)
+        result.append(ch_dict)
+    return result
+
+
+def main():
+    raw_path = Path("data/raw/luat_ke_toan_2025.txt")
+    out_path = Path("data/processed/luat_ke_toan_2025_structured.json")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    print(f"Reading {raw_path}...")
+    text = raw_path.read_text(encoding="utf-8")
+
+    print("Parsing law structure...")
+    chapters = parse_law(text)
+
+    data = chapters_to_dict(chapters)
+
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+    total_dieu = sum(len(ch["dieus"]) for ch in data)
+    total_khoan = sum(len(d["khoans"]) for ch in data for d in ch["dieus"])
+    total_diem = sum(len(di) for ch in data for d in ch["dieus"] for k in d["khoans"] for di in k["diems"])
+
+    print(f"Parsed {len(data)} chapters, {total_dieu} articles, {total_khoan} clauses, {total_diem} points")
+    print(f"Saved → {out_path}")
+
+
+if __name__ == "__main__":
+    main()
+</file>
+
+<file path="scripts/train_lora_phobert.py">
+"""Train LoRA PhoBERT on Luật Kế toán 2025 for intent classification + NER.
+
+Uses PEFT LoRA adapters on PhoBERT base, fine-tuning both intent and NER heads.
+Dataset: data/processed/qa_ke_toan_train.json (generated from law text)
+
+Usage:
+    PYTHONPATH=/path/to/legal-ai:$PYTHONPATH python scripts/train_lora_phobert.py
+"""
+
+import json
+import random
+import torch
+import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
+from transformers import AutoTokenizer, AutoModel, get_linear_schedule_with_warmup
+from peft import LoraConfig, get_peft_model, TaskType
+from pathlib import Path
+from tqdm import tqdm
+
+from src.common.config import (
+    PHOBERT_MODEL, MAX_SEQ_LENGTH,
+    INTENT_LABELS, NER_LABELS,
+    LEARNING_RATE, NUM_EPOCHS, TRAIN_BATCH_SIZE,
+    INTENT_MODEL_DIR, NER_MODEL_DIR,
+)
+
+
+class LoRAConfig:
+    """LoRA hyperparameters."""
+    R = 16
+    ALPHA = 32
+    DROPOUT = 0.1
+    TARGET_MODULES = ["query", "key", "value", "dense"]
+
+
+class LawQADataset(Dataset):
+    """Dataset for legal QA with intent + NER labels."""
+
+    def __init__(self, data_path: Path, tokenizer, intent_label2id, ner_label2id, max_length=256):
+        with open(data_path, encoding="utf-8") as f:
+            self.data = json.load(f)
+        self.tokenizer = tokenizer
+        self.intent_label2id = intent_label2id
+        self.ner_label2id = ner_label2id
+        self.max_length = max_length
+        self.num_intents = len(intent_label2id)
+        self.num_ner_labels = len(ner_label2id)
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        item = self.data[idx]
+        question = item["question"]
+        answer = item["answer"]
+        intent = item["intent"]
+        ner_labels = item["ner_labels"]
+
+        # Combine question + answer for NER (answer contains entities)
+        text = f"{question} [SEP] {answer}"
+
+        encoding = self.tokenizer(
+            text,
+            max_length=self.max_length,
+            truncation=True,
+            padding="max_length",
+            return_tensors="pt",
+        )
+
+        input_ids = encoding["input_ids"].squeeze(0)
+        attention_mask = encoding["attention_mask"].squeeze(0)
+
+        # Intent label
+        intent_label = self.intent_label2id.get(intent, 0)
+
+        # NER labels aligned with tokenizer tokens
+        # For simplicity, map word-level NER to token-level by extending
+        tokens = text.split()
+        token_ner_labels = []
+        for i, token in enumerate(tokens):
+            wordpiece_tokens = self.tokenizer.tokenize(token)
+            if i < len(ner_labels):
+                label = ner_labels[i]
+            else:
+                label = "O"
+            token_ner_labels.extend([label] + ["O"] * (len(wordpiece_tokens) - 1))
+
+        # Pad/truncate to max_length
+        token_ner_ids = [self.ner_label2id.get(l, self.ner_label2id["O"]) for l in token_ner_labels]
+        if len(token_ner_ids) < self.max_length:
+            token_ner_ids += [self.ner_label2id["O"]] * (self.max_length - len(token_ner_ids))
+        else:
+            token_ner_ids = token_ner_ids[:self.max_length]
+
+        ner_labels_tensor = torch.tensor(token_ner_ids, dtype=torch.long)
+
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "intent_label": torch.tensor(intent_label, dtype=torch.long),
+            "ner_labels": ner_labels_tensor,
+        }
+
+
+class PhoBERTMultiTaskLoRA(nn.Module):
+    """PhoBERT with LoRA adapters + Intent + NER heads."""
+
+    def __init__(self, num_intents: int, num_ner_labels: int, lora_config: LoRAConfig):
+        super().__init__()
+        self.phobert = AutoModel.from_pretrained(PHOBERT_MODEL)
+
+        # Apply LoRA
+        peft_config = LoraConfig(
+            task_type=TaskType.FEATURE_EXTRACTION,
+            r=lora_config.R,
+            lora_alpha=lora_config.ALPHA,
+            lora_dropout=lora_config.DROPOUT,
+            target_modules=lora_config.TARGET_MODULES,
+            bias="none",
+        )
+        self.phobert = get_peft_model(self.phobert, peft_config)
+
+        # Intent classification head
+        self.intent_dropout = nn.Dropout(0.1)
+        self.intent_classifier = nn.Linear(768, num_intents)
+
+        # NER head
+        self.ner_dropout = nn.Dropout(0.1)
+        self.ner_classifier = nn.Linear(768, num_ner_labels)
+
+    def forward(self, input_ids, attention_mask):
+        outputs = self.phobert(input_ids=input_ids, attention_mask=attention_mask)
+        sequence_output = outputs.last_hidden_state  # (batch, seq_len, 768)
+
+        # Intent: use [CLS] token (index 0)
+        cls_output = sequence_output[:, 0, :]  # (batch, 768)
+        cls_output = self.intent_dropout(cls_output)
+        intent_logits = self.intent_classifier(cls_output)  # (batch, num_intents)
+
+        # NER: use all tokens
+        ner_output = self.ner_dropout(sequence_output)
+        ner_logits = self.ner_classifier(ner_output)  # (batch, seq_len, num_ner_labels)
+
+        return intent_logits, ner_logits
+
+
+def train_epoch(model, dataloader, optimizer, scheduler, device, epoch):
+    model.train()
+    total_loss = 0
+    intent_correct = 0
+    intent_total = 0
+    ner_correct = 0
+    ner_total = 0
+
+    intent_criterion = nn.CrossEntropyLoss()
+    ner_criterion = nn.CrossEntropyLoss(ignore_index=-100)
+
+    progress = tqdm(dataloader, desc=f"Epoch {epoch}")
+    for batch in progress:
+        input_ids = batch["input_ids"].to(device)
+        attention_mask = batch["attention_mask"].to(device)
+        intent_labels = batch["intent_label"].to(device)
+        ner_labels = batch["ner_labels"].to(device)
+
+        optimizer.zero_grad()
+        intent_logits, ner_logits = model(input_ids, attention_mask)
+
+        # Intent loss
+        intent_loss = intent_criterion(intent_logits, intent_labels)
+
+        # NER loss
+        ner_logits_flat = ner_logits.view(-1, ner_logits.size(-1))
+        ner_labels_flat = ner_labels.view(-1)
+        ner_loss = ner_criterion(ner_logits_flat, ner_labels_flat)
+
+        loss = intent_loss + ner_loss
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
+        scheduler.step()
+
+        total_loss += loss.item()
+
+        # Metrics
+        intent_preds = torch.argmax(intent_logits, dim=-1)
+        intent_correct += (intent_preds == intent_labels).sum().item()
+        intent_total += intent_labels.size(0)
+
+        ner_preds = torch.argmax(ner_logits, dim=-1)
+        ner_mask = ner_labels != -100
+        ner_correct += ((ner_preds == ner_labels) & ner_mask).sum().item()
+        ner_total += ner_mask.sum().item()
+
+        progress.set_postfix({
+            "loss": f"{loss.item():.4f}",
+            "intent_acc": f"{intent_correct/intent_total:.3f}",
+            "ner_acc": f"{ner_correct/ner_total:.3f}" if ner_total > 0 else "0.000",
+        })
+
+    avg_loss = total_loss / len(dataloader)
+    intent_acc = intent_correct / intent_total if intent_total > 0 else 0
+    ner_acc = ner_correct / ner_total if ner_total > 0 else 0
+    return avg_loss, intent_acc, ner_acc
+
+
+def main():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Device: {device}")
+
+    # Labels
+    intent_label2id = {label: i for i, label in enumerate(INTENT_LABELS)}
+    ner_label2id = {label: i for i, label in enumerate(NER_LABELS)}
+
+    # Tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(PHOBERT_MODEL)
+
+    # Dataset
+    data_path = Path("data/processed/qa_ke_toan_train_v2.json")
+    dataset = LawQADataset(data_path, tokenizer, intent_label2id, ner_label2id, MAX_SEQ_LENGTH)
+    dataloader = DataLoader(dataset, batch_size=TRAIN_BATCH_SIZE, shuffle=True)
+
+    print(f"Dataset size: {len(dataset)}")
+    print(f"Intent classes: {len(INTENT_LABELS)}")
+    print(f"NER labels: {len(NER_LABELS)}")
+
+    # Model
+    lora_config = LoRAConfig()
+    model = PhoBERTMultiTaskLoRA(
+        num_intents=len(INTENT_LABELS),
+        num_ner_labels=len(NER_LABELS),
+        lora_config=lora_config,
+    ).to(device)
+
+    # Print trainable parameters
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"Trainable params: {trainable_params:,} / {total_params:,} ({trainable_params/total_params*100:.2f}%)")
+
+    # Optimizer & scheduler
+    optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
+    total_steps = len(dataloader) * NUM_EPOCHS
+    scheduler = get_linear_schedule_with_warmup(
+        optimizer, num_warmup_steps=int(0.1 * total_steps), num_training_steps=total_steps
+    )
+
+    # Training loop
+    best_loss = float("inf")
+    for epoch in range(1, NUM_EPOCHS + 1):
+        avg_loss, intent_acc, ner_acc = train_epoch(model, dataloader, optimizer, scheduler, device, epoch)
+        print(f"Epoch {epoch}: loss={avg_loss:.4f}, intent_acc={intent_acc:.3f}, ner_acc={ner_acc:.3f}")
+
+        if avg_loss < best_loss:
+            best_loss = avg_loss
+            # Save checkpoint
+            save_dir = Path("data/models/lora_ke_toan")
+            save_dir.mkdir(parents=True, exist_ok=True)
+            torch.save({
+                "epoch": epoch,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "intent_label2id": intent_label2id,
+                "ner_label2id": ner_label2id,
+            }, save_dir / "best_model.pt")
+            print(f"  Saved best model → {save_dir / 'best_model.pt'}")
+
+    print("Training complete!")
+    print(f"Best model saved at: data/models/lora_ke_toan/best_model.pt")
+
+
+if __name__ == "__main__":
+    main()
+</file>
+
+<file path="src/chatbot/__init__.py">
+
+</file>
+
+<file path="src/chatbot/intent_classifier.py">
+"""PhoBERT Intent Classifier — Head 1.
+
+Fine-tunes vinai/phobert-base for Vietnamese legal question intent classification.
+20+ intent classes covering common legal queries.
+"""
+
+import torch
+import torch.nn as nn
+from transformers import AutoModel, AutoTokenizer
+from src.common.config import INTENT_LABELS, PHOBERT_MODEL, MAX_SEQ_LENGTH
+
+
+class PhoBERTIntentClassifier(nn.Module):
+    """Intent classification head on top of PhoBERT.
+
+    Architecture: PhoBERT → [CLS] → Dropout → Linear(768, num_intents)
+
+    Input: Vietnamese legal question (word-segmented)
+    Output: Intent probability distribution over 20+ classes
+    """
+
+    def __init__(self, model_name: str = PHOBERT_MODEL, num_intents: int = None):
+        super().__init__()
+        self.num_intents = num_intents or len(INTENT_LABELS)
+        self.phobert = AutoModel.from_pretrained(model_name)
+        self.dropout = nn.Dropout(0.1)
+        self.classifier = nn.Linear(768, self.num_intents)
+
+        self.id2label = {i: label for i, label in enumerate(INTENT_LABELS[:self.num_intents])}
+        self.label2id = {label: i for i, label in enumerate(INTENT_LABELS[:self.num_intents])}
+
+    def forward(self, input_ids, attention_mask):
+        """Forward pass.
+
+        Args:
+            input_ids: Token IDs (batch, seq_len)
+            attention_mask: Attention mask (batch, seq_len)
+
+        Returns:
+            Logits of shape (batch, num_intents)
+        """
+        outputs = self.phobert(input_ids=input_ids, attention_mask=attention_mask)
+        cls_output = outputs.last_hidden_state[:, 0, :]  # [CLS] token
+        cls_output = self.dropout(cls_output)
+        logits = self.classifier(cls_output)
+        return logits
+
+    def predict(self, text: str, tokenizer, device: str = "cpu") -> dict:
+        """Predict intent for a single question.
+
+        Args:
+            text: Vietnamese legal question (should be pre-segmented)
+            tokenizer: PhoBERT tokenizer
+            device: 'cpu' or 'cuda'
+
+        Returns:
+            Dict with 'intent', 'confidence', 'probabilities'
+        """
+        self.eval()
+        self.to(device)
+
+        encoding = tokenizer(
+            text, max_length=MAX_SEQ_LENGTH, truncation=True,
+            padding="max_length", return_tensors="pt"
+        )
+        input_ids = encoding["input_ids"].to(device)
+        attention_mask = encoding["attention_mask"].to(device)
+
+        with torch.no_grad():
+            logits = self.forward(input_ids, attention_mask)
+            probs = torch.softmax(logits, dim=-1)
+            pred_idx = torch.argmax(probs, dim=-1).item()
+            confidence = probs[0, pred_idx].item()
+
+        return {
+            "intent": self.id2label[pred_idx],
+            "confidence": confidence,
+            "probabilities": {self.id2label[i]: probs[0, i].item() for i in range(self.num_intents)},
+        }
+</file>
+
+<file path="src/chatbot/ner_tagger.py">
+"""PhoBERT NER Tagger — Head 2.
+
+Fine-tunes vinai/phobert-base for Vietnamese legal Named Entity Recognition.
+9 entity types with BIO tagging scheme (19 tags total).
+"""
+
+import torch
+import torch.nn as nn
+from transformers import AutoModel, AutoTokenizer
+from src.common.config import NER_LABELS, ENTITY_TYPES, PHOBERT_MODEL, MAX_SEQ_LENGTH
+
+
+class PhoBERTNERTagger(nn.Module):
+    """Named Entity Recognition head on top of PhoBERT.
+
+    Architecture: PhoBERT → Dropout → Linear(768, num_labels)
+
+    Entity types: LUAT, THONG_TU, NGHI_DINH, DIEU, KHOAN, DIEM, CO_QUAN, KHAISUAT, NGAY_THANG
+    Tagging scheme: BIO (B-entity, I-entity, O)
+
+    Input: Vietnamese legal text (word-segmented)
+    Output: Token-level entity tags
+    """
+
+    def __init__(self, model_name: str = PHOBERT_MODEL, num_labels: int = None):
+        super().__init__()
+        self.num_labels = num_labels or len(NER_LABELS)
+        self.phobert = AutoModel.from_pretrained(model_name)
+        self.dropout = nn.Dropout(0.1)
+        self.classifier = nn.Linear(768, self.num_labels)
+
+        self.id2label = {i: label for i, label in enumerate(NER_LABELS[:self.num_labels])}
+        self.label2id = {label: i for i, label in enumerate(NER_LABELS[:self.num_labels])}
+
+    def forward(self, input_ids, attention_mask, labels=None):
+        """Forward pass.
+
+        Args:
+            input_ids: Token IDs (batch, seq_len)
+            attention_mask: Attention mask (batch, seq_len)
+            labels: BIO tag IDs (batch, seq_len), -100 for subword tokens
+
+        Returns:
+            Loss (if labels provided) and logits
+        """
+        outputs = self.phobert(input_ids=input_ids, attention_mask=attention_mask)
+        sequence_output = outputs.last_hidden_state  # (batch, seq_len, 768)
+        sequence_output = self.dropout(sequence_output)
+        logits = self.classifier(sequence_output)  # (batch, seq_len, num_labels)
+
+        loss = None
+        if labels is not None:
+            # Ignore -100 labels in loss computation
+            loss_fct = nn.CrossEntropyLoss(ignore_index=-100)
+            # Flatten for cross entropy
+            active_logits = logits.view(-1, self.num_labels)
+            active_labels = labels.view(-1)
+            loss = loss_fct(active_logits, active_labels)
+
+        return {"loss": loss, "logits": logits}
+
+    def predict(self, text: str, tokenizer, device: str = "cpu") -> list[dict]:
+        """Predict entities in a single text.
+
+        Args:
+            text: Vietnamese legal text (should be pre-segmented)
+            tokenizer: PhoBERT tokenizer
+            device: 'cpu' or 'cuda'
+
+        Returns:
+            List of dicts: [{"entity": "THONG_TU", "text": "Thông tư 99", "start": 0, "end": 10}, ...]
+        """
+        self.eval()
+        self.to(device)
+
+        encoding = tokenizer(
+            text, max_length=MAX_SEQ_LENGTH, truncation=True,
+            padding="max_length", return_tensors="pt"
+        )
+        input_ids = encoding["input_ids"].to(device)
+        attention_mask = encoding["attention_mask"].to(device)
+
+        with torch.no_grad():
+            output = self.forward(input_ids, attention_mask)
+            predictions = torch.argmax(output["logits"], dim=-1)[0]
+
+        # Convert token-level predictions to entities
+        tokens = tokenizer.convert_ids_to_tokens(input_ids[0])
+        entities = []
+        current_entity = None
+
+        for idx, (token, pred_id) in enumerate(zip(tokens, predictions)):
+            if token in tokenizer.special_tokens_map.values():
+                continue
+            if pred_id.item() == self.label2id.get("O", 0):
+                if current_entity:
+                    entities.append(current_entity)
+                    current_entity = None
+                continue
+
+            label = self.id2label.get(pred_id.item(), "O")
+            if label.startswith("B-"):
+                if current_entity:
+                    entities.append(current_entity)
+                entity_type = label[2:]
+                current_entity = {
+                    "entity": entity_type,
+                    "text": token.replace("▁", "").replace("@@", ""),
+                    "start": idx,
+                    "end": idx + 1,
+                }
+            elif label.startswith("I-") and current_entity:
+                current_entity["text"] += token.replace("▁", " ").replace("@@", "")
+                current_entity["end"] = idx + 1
+            else:
+                if current_entity:
+                    entities.append(current_entity)
+                    current_entity = None
+
+        if current_entity:
+            entities.append(current_entity)
+
+        return entities
+</file>
+
+<file path="src/common/config.py">
+"""Configuration: paths, model names, hyperparameters."""
+
+from pathlib import Path
+
+# ── Paths ──────────────────────────────────────────────
+BASE_DIR = Path(__file__).parent.parent.parent
+DATA_DIR = BASE_DIR / "data"
+RAW_DIR = DATA_DIR / "raw"
+PROCESSED_DIR = DATA_DIR / "processed"
+MODELS_DIR = DATA_DIR / "models"
+
+QA_DATA_PATH = RAW_DIR / "yuiTC_sample.json"
+LEGAL_DATA_PATH = RAW_DIR / "uts_vlc_processed.json"
+
+INTENT_MODEL_DIR = MODELS_DIR / "intent_classifier"
+NER_MODEL_DIR = MODELS_DIR / "ner_tagger"
+SCORER_MODEL_DIR = MODELS_DIR / "sentence_scorer"
+SEARCH_INDEX_PATH = PROCESSED_DIR / "search_index.json"
+KG_PATH = PROCESSED_DIR / "knowledge_graph.gpickle"
+
+# ── Model ──────────────────────────────────────────────
+PHOBERT_MODEL = "vinai/phobert-base"
+MAX_SEQ_LENGTH = 256
+
+# ── Intent Classification ─────────────────────────────
+INTENT_LABELS = [
+    "hoi_dieu_khoan",        # hỏi nội dung điều khoản
+    "hoi_luat_moi",          # hỏi luật mới ban hành
+    "tra_cuu_thong_tu",      # tra cứu thông tư
+    "tra_cuu_nghi_dinh",     # tra cứu nghị định
+    "tra_cuu_luat",          # tra cứu luật
+    "hoi_hieu_luc",          # hỏi còn hiệu lực không
+    "hoi_sua_doi",           # hỏi văn bản sửa đổi
+    "hoi_dinh_nghia",        # hỏi định nghĩa/khái niệm
+    "hoi_thu_tuc",           # hỏi thủ tục
+    "hoi_hinh_phat",         # hỏi hình phạt/xử phạt
+    "hoi_quyen_loi",         # hỏi quyền lợi
+    "hoi_nghia_vu",          # hỏi nghĩa vụ
+    "hoi_bieu_phi",           # hỏi biểu phí/lệ phí
+    "hoi_thoi_han",          # hỏi thời hạn/thời hiệu
+    "hoi_doi_tuong",         # hỏi đối tượng áp dụng
+    "hoi_dieu_kien",         # hỏi điều kiện
+    "hoi_phan_biet",         # hỏi phân biệt/sự khác biệt
+    "hoi_so_sanh",           # hỏi so sánh
+    "hoi_tom_tat",           # yêu cầu tóm tắt
+    "hoi_tong_hop",          # hỏi tổng hợp
+]
+
+# ── NER Entity Types (BIO scheme) ─────────────────────
+ENTITY_TYPES = [
+    "LUAT",        # Luật (Law)
+    "THONG_TU",    # Thông tư (Circular)
+    "NGHI_DINH",   # Nghị định (Decree)
+    "DIEU",        # Điều (Article)
+    "KHOAN",       # Khoản (Clause)
+    "DIEM",        # Điểm (Point)
+    "CO_QUAN",     # Cơ quan (Agency/Organization)
+    "KHAISUAT",    # Khái niệm pháp lý (Legal concept)
+    "NGAY_THANG",  # Ngày tháng (Date)
+]
+
+# B-I-O tags
+NER_LABELS = ["O"] + [f"{prefix}-{etype}" for etype in ENTITY_TYPES for prefix in ["B", "I"]]
+
+# ── Summarizer ──────────────────────────────────────────
+SUMMARY_WEIGHTS = {
+    "relevance": 0.4,   # cosine(query, sentence)
+    "centrality": 0.4,  # TextRank PageRank
+    "position": 0.2,    # sentence position bonus
+}
+
+TEXTRANK_DAMPING = 0.85
+TEXTRANK_MAX_ITER = 100
+TEXTRANK_TOLERANCE = 1e-5
+
+# ── Search ──────────────────────────────────────────────
+BM25_K1 = 1.5
+BM25_B = 0.75
+SEARCH_TOP_K = 10
+FUZZY_MAX_DIST = 2
+
+# ── Knowledge Graph ─────────────────────────────────────
+RELATION_TYPES = [
+    "DUA_TREN",          # dựa trên (is pursuant to)
+    "THAM_CHIEU",        # tham chiếu (refers to)
+    "HET_HIEU_LUC",      # hết hiệu lực (expires)
+    "THAY_THE",          # thay thế (supersedes)
+    "SUA_DOI_BO_SUNG",   # sửa đổi/bổ sung (amends/supplements)
+    "HUONG_DAN",         # hướng dẫn (guides)
+    "CHUA",              # chứa (contains)
+]
+
+DOCUMENT_TYPES = [
+    "hien_phap",    # Hiến pháp (Constitution)
+    "bo_luat",      # Bộ luật (Code)
+    "luat",         # Luật (Law)
+    "nghi_dinh",    # Nghị định (Decree)
+    "thong_tu",     # Thông tư (Circular)
+    "quyet_dinh",   # Quyết định (Decision)
+    "nghi_quyet",   # Nghị quyết (Resolution)
+]
+
+# ── Training ────────────────────────────────────────────
+TRAIN_BATCH_SIZE = 32
+SCORER_BATCH_SIZE = 16
+LEARNING_RATE = 1e-5
+SCORER_LEARNING_RATE = 2e-5
+NUM_EPOCHS = 30
+EARLY_STOPPING_PATIENCE = 5
+FP16 = True
+</file>
+
+<file path="src/common/data_loader.py">
+"""Common utilities shared across all modules."""
+
+import json
+import re
+from pathlib import Path
+from typing import Optional
+
+
+DATA_DIR = Path(__file__).parent.parent.parent / "data"
+
+
+def load_qa_data(path: Optional[str] = None) -> list[dict]:
+    """Load Vietnamese legal Q&A data.
+
+    Expected format: {"count": N, "columns": [...], "sample": {...}}
+    or a list of {"question": ..., "context_list": ..., "qid": ..., "cid": ...}
+    """
+    path = Path(path) if path else DATA_DIR / "raw" / "yuiTC_sample.json"
+    if not path.exists():
+        return []
+
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+
+    # Handle wrapped format: {"count": ..., "sample": {...}}
+    if isinstance(data, dict) and "sample" in data:
+        return [_unwrap_qa_entry(data["sample"])]
+
+    # Handle list format
+    if isinstance(data, list):
+        return [_unwrap_qa_entry(entry) for entry in data]
+
+    return []
+
+
+def _unwrap_qa_entry(entry: dict) -> dict:
+    """Normalize a QA entry into consistent format."""
+    return {
+        "question": entry.get("question", ""),
+        "context": entry.get("context_list", entry.get("context", "")),
+        "qid": entry.get("qid", ""),
+        "cid": entry.get("cid", ""),
+    }
+
+
+def load_legal_documents(path: Optional[str] = None) -> list[dict]:
+    """Load processed legal documents.
+
+    Returns list of {"id": ..., "title": ..., "content": ..., "type": ..., "metadata": ...}
+    """
+    path = Path(path) if path else DATA_DIR / "raw" / "uts_vlc_processed.json"
+    if not path.exists():
+        return []
+
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+
+    if isinstance(data, list):
+        return data
+
+    return []
+
+
+def segment_sentences(text: str) -> list[str]:
+    """Simple Vietnamese sentence segmentation."""
+    # Split on period, question mark, exclamation followed by space or end
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    return [s.strip() for s in sentences if len(s.strip()) > 10]
+
+
+def clean_vietnamese_text(text: str) -> str:
+    """Clean Vietnamese legal text."""
+    # Remove excessive whitespace
+    text = re.sub(r'\s+', ' ', text)
+    # Remove zero-width characters
+    text = text.replace('\u200b', '').replace('\ufeff', '')
+    return text.strip()
+
+
+def extract_article_references(text: str) -> list[str]:
+    """Extract article references from Vietnamese legal text.
+
+    Patterns: 'Điều X', 'Khoản X', 'Thông tư X', 'Nghị định X', etc.
+    """
+    patterns = [
+        r'Điều\s+\d+',
+        r'Khoản\s+\d+',
+        r'Thông tư\s+[\d/]+',
+        r'Nghị định\s+[\d/]+',
+        r'Luật\s+[\w\s]+',
+    ]
+    refs = []
+    for pattern in patterns:
+        refs.extend(re.findall(pattern, text))
+    return list(set(refs))
+</file>
+
+<file path="src/knowledge/__init__.py">
+
+</file>
+
+<file path="src/knowledge/entity_extractor.py">
+"""Knowledge Graph: Entity and relation extraction from Vietnamese legal text.
+
+Extracts 9 entity types and 7 relation types from legal documents.
+Uses regex for structural extraction + NER for semantic extraction.
+"""
+
+import re
+from dataclasses import dataclass, field
+from typing import Optional
+
+from src.common.config import ENTITY_TYPES, RELATION_TYPES, DOCUMENT_TYPES
+from src.common.text_processor import extract_legal_references
+
+
+@dataclass
+class LegalEntity:
+    """A node in the legal knowledge graph."""
+    id: str                        # Unique identifier (e.g., "TT_99_2015")
+    type: str                       # Entity type (LUAT, THONG_TU, DIEU, etc.)
+    name: str                       # Full name (e.g., "Thông tư 99/2015/TT-BTC")
+    properties: dict = field(default_factory=dict)  # Additional attributes
+
+
+@dataclass
+class LegalRelation:
+    """An edge in the legal knowledge graph."""
+    source_id: str    # Source entity ID
+    target_id: str    # Target entity ID
+    relation_type: str  # One of RELATION_TYPES
+    properties: dict = field(default_factory=dict)
+
+
+class LegalEntityExtractor:
+    """Extract legal entities from text using regex patterns.
+
+    9 entity types: LUAT, THONG_TU, NGHI_DINH, DIEU, KHOAN, DIEM,
+                    CO_QUAN, KHAISUAT, NGAY_THANG
+    """
+
+    PATTERNS = {
+        "THONG_TU": [
+            r"Thông\s+tư\s+(?:số\s+)?(\d+(?:/\d+)*(?:/TT-\w+)?)",
+            r"TT\s+(?:số\s+)?(\d+(?:/\d+)*)",
+        ],
+        "NGHI_DINH": [
+            r"Nghị\s+định\s+(?:số\s+)?(\d+(?:/\d+)*(?:/NĐ-CP)?)",
+            r"NĐ\s+(?:số\s+)?(\d+(?:/\d+)*)",
+        ],
+        "LUAT": [
+            r"Luật\s+([\w\s]+?)(?:\s+số|năm|\d{4}|$)",
+            r"Bộ\s+luật\s+([\w\s]+?)(?:\s+số|năm|\d{4}|$)",
+        ],
+        "DIEU": [
+            r"Điều\s+(\d+)",
+            r"điều\s+(\d+)",
+        ],
+        "KHOAN": [
+            r"Khoản\s+(\d+)",
+            r"khoản\s+(\d+)",
+        ],
+        "DIEM": [
+            r"Điểm\s+([a-zđ]+)",
+            r"điểm\s+([a-zđ]+)",
+        ],
+        "CO_QUAN": [
+            r"Bộ\s+([\w\s]+?)(?:\s*,|\s*\.|$)",
+            r"Ủy\s+ban\s+([\w\s]+?)(?:\s*,|\s*\.|$)",
+            r"Chính\s+phủ",
+            r"Quốc\s+hội",
+            r"Hội\s+đồng\s+([\w\s]+?)(?:\s*,|\s*\.|$)",
+        ],
+        "NGAY_THANG": [
+            r"ngày\s+(\d{1,2}\s+tháng\s+\d{1,2}\s+năm\s+\d{4})",
+            r"ngày\s+(\d{1,2}/\d{1,2}/\d{4})",
+        ],
+    }
+
+    def extract(self, text: str) -> list[LegalEntity]:
+        """Extract all legal entities from text."""
+        entities = []
+        seen_ids = set()
+
+        # Use common extractor first (handles most structural refs)
+        refs = extract_legal_references(text)
+        for ref in refs:
+            entity_id = f"{ref['type']}_{ref['value'].replace('/', '_').replace(' ', '_')}"
+            if entity_id not in seen_ids:
+                seen_ids.add(entity_id)
+                entities.append(LegalEntity(
+                    id=entity_id,
+                    type=ref["type"],
+                    name=ref["full"],
+                    properties={"value": ref["value"], "position": ref["start"]},
+                ))
+
+        # Additional patterns not covered by common extractor
+        for entity_type, patterns in self.PATTERNS.items():
+            if entity_type in ("THONG_TU", "NGHI_DINH", "LUAT", "DIEU", "KHOAN", "DIEM"):
+                continue  # Already handled by extract_legal_references
+
+            for pattern in patterns:
+                for match in re.finditer(pattern, text, re.IGNORECASE):
+                    entity_id = f"{entity_type}_{match.group(0).replace(' ', '_')}"
+                    if entity_id not in seen_ids:
+                        seen_ids.add(entity_id)
+                        entities.append(LegalEntity(
+                            id=entity_id,
+                            type=entity_type,
+                            name=match.group(0),
+                            properties={"position": match.start()},
+                        ))
+
+        return entities
+
+
+class LegalRelationExtractor:
+    """Extract legal relations from text.
+
+    7 relation types: DUA_TREN, THAM_CHIEU, HET_HIEU_LUC, THAY_THE,
+                      SUA_DOI_BO_SUNG, HUONG_DAN, CHUA
+    """
+
+    RELATION_PATTERNS = {
+        "DUA_TREN": [
+            r"căn cứ\s+([\w\s]+?Luật[\w\s]+)",
+            "căn cứ\s+(.+?)(?:\s*[;,]\s*căn cứ)",
+            r"dựa\s+trên\s+(.+?)(?:\s*[;,.])",
+        ],
+        "THAM_CHIEU": [
+            r"tham\s+chiếu\s+(?:điều\s+\d+.*?)?(?:của\s+)?([\w\s]+?Luật[\w\s]+|Thông\s+tư\s+[\d/]+|Nghị\s+định\s+[\d/]+)",
+            r"theo\s+([\w\s]+?Luật[\w\s]+|Thông\s+tư\s+[\d/]+|Nghị\s+định\s+[\d/]+)",
+        ],
+        "HET_HIEU_LUC": [
+            r"hết\s+hiệu\s+lực",
+            r"bãi\s+bỏ",
+            r"thu\s+hồi",
+        ],
+        "THAY_THE": [
+            r"thay\s+thế\s+(.+?)(?:\s*[;.])",
+            r"thay\s+cho\s+(.+?)(?:\s*[;.])",
+        ],
+        "SUA_DOI_BO_SUNG": [
+            r"sửa\s+đổi|bổ\s+sung",
+            r"sửa\s+đổi,\s*bổ\s+sung",
+        ],
+        "HUONG_DAN": [
+            r"hướng\s+dẫn\s+thi\s+hành",
+            r"hướng\s+dẫn\s+nghiệp\s+vụ",
+        ],
+        "CHUA": [
+            r"gồm\s+\d+\s+(?:điều|khoản)",
+            r"được\s+chia\s+thành\s+\d+\s+(?:chương|phần|mục)",
+        ],
+    }
+
+    def extract(self, text: str, doc_entity: LegalEntity) -> list[LegalRelation]:
+        """Extract relations from a legal document text.
+
+        Args:
+            text: Full document text
+            doc_entity: The document entity (source of relations)
+
+        Returns:
+            List of LegalRelation objects
+        """
+        relations = []
+        entity_extractor = LegalEntityExtractor()
+        entities = entity_extractor.extract(text)
+
+        for rel_type, patterns in self.RELATION_PATTERNS.items():
+            for pattern in patterns:
+                for match in re.finditer(pattern, text, re.IGNORECASE):
+                    # Find target entities near the match
+                    match_start = max(0, match.start() - 50)
+                    match_end = min(len(text), match.end() + 200)
+                    context = text[match_start:match_end]
+
+                    # Look for referenced documents in context
+                    target_refs = extract_legal_references(context)
+                    for ref in target_refs:
+                        target_id = f"{ref['type']}_{ref['value'].replace('/', '_').replace(' ', '_')}"
+                        if target_id != doc_entity.id:
+                            relations.append(LegalRelation(
+                                source_id=doc_entity.id,
+                                target_id=target_id,
+                                relation_type=rel_type,
+                                properties={
+                                    "evidence": match.group(0),
+                                    "position": match.start(),
+                                },
+                            ))
+
+        # Structural relations: document contains articles
+        for entity in entities:
+            if entity.type == "DIEU" and entity.id != doc_entity.id:
+                relations.append(LegalRelation(
+                    source_id=doc_entity.id,
+                    target_id=entity.id,
+                    relation_type="CHUA",
+                    properties={"article": entity.properties.get("value", "")},
+                ))
+
+        return relations
+
+
+def determine_document_type(title: str, content: str) -> str:
+    """Classify a legal document into one of DOCUMENT_TYPES."""
+    text = (title + " " + content[:500]).lower()
+
+    type_keywords = {
+        "hien_phap": ["hiến pháp"],
+        "bo_luat": ["bộ luật", "bộ luật"],
+        "luat": ["luật ", "luật số"],
+        "nghi_dinh": ["nghị định", "nghị quyết số", "nđ-cp"],
+        "thong_tu": ["thông tư", "tt-btc", "tt-bnn", "tt-byt"],
+        "quyet_dinh": ["quyết định"],
+        "nghi_quyet": ["nghị quyết"],
+    }
+
+    for doc_type, keywords in type_keywords.items():
+        for kw in keywords:
+            if kw in text:
+                return doc_type
+
+    return "other"
+</file>
+
+<file path="src/knowledge/graph_builder.py">
+"""Knowledge Graph construction from Vietnamese legal documents.
+
+Builds a NetworkX DiGraph with:
+- 9 entity types as nodes
+- 7 relation types as edges
+- Properties: effective_date, status, etc.
+"""
+
+import json
+import pickle
+from pathlib import Path
+from typing import Optional
+
+import networkx as nx
+
+from src.common.config import (
+    LEGAL_DATA_PATH, PROCESSED_DIR, KG_PATH,
+    ENTITY_TYPES, RELATION_TYPES, DOCUMENT_TYPES,
+)
+from src.common.text_processor import clean_vietnamese, segment_sentences
+from src.knowledge.entity_extractor import (
+    LegalEntity, LegalRelation,
+    LegalEntityExtractor, LegalRelationExtractor,
+    determine_document_type,
+)
+
+
+class LegalKnowledgeGraph:
+    """Legal knowledge graph using NetworkX DiGraph."""
+
+    # Node colors for visualization
+    NODE_COLORS = {
+        "THONG_TU": "#4CAF50",
+        "NGHI_DINH": "#2196F3",
+        "LUAT": "#FF5722",
+        "BO_LUAT": "#9C27B0",
+        "HIEN_PHAP": "#F44336",
+        "DIEU": "#FF9800",
+        "KHOAN": "#FFC107",
+        "DIEM": "#8BC34A",
+        "CO_QUAN": "#607D8B",
+        "KHAISUAT": "#795548",
+        "NGAY_THANG": "#009688",
+    }
+
+    # Edge colors for visualization
+    EDGE_COLORS = {
+        "DUA_TREN": "#2196F3",
+        "THAM_CHIEU": "#4CAF50",
+        "HET_HIEU_LUC": "#F44336",
+        "THAY_THE": "#FF9800",
+        "SUA_DOI_BO_SUNG": "#9C27B0",
+        "HUONG_DAN": "#00BCD4",
+        "CHUA": "#607D8B",
+    }
+
+    def __init__(self):
+        self.G = nx.DiGraph()
+        self._entity_extractor = LegalEntityExtractor()
+        self._relation_extractor = LegalRelationExtractor()
+
+    @property
+    def node_count(self) -> int:
+        return self.G.number_of_nodes()
+
+    @property
+    def edge_count(self) -> int:
+        return self.G.number_of_edges()
+
+    def add_entity(self, entity: LegalEntity):
+        """Add a legal entity as a node."""
+        self.G.add_node(
+            entity.id,
+            type=entity.type,
+            name=entity.name,
+            **entity.properties,
+        )
+
+    def add_relation(self, relation: LegalRelation):
+        """Add a legal relation as an edge."""
+        # Ensure both nodes exist
+        if relation.source_id not in self.G:
+            self.G.add_node(relation.source_id, type="UNKNOWN", name=relation.source_id)
+        if relation.target_id not in self.G:
+            self.G.add_node(relation.target_id, type="UNKNOWN", name=relation.target_id)
+
+        self.G.add_edge(
+            relation.source_id,
+            relation.target_id,
+            relation_type=relation.relation_type,
+            **relation.properties,
+        )
+
+    def add_document(self, doc: dict):
+        """Process a legal document and add all entities and relations to the graph.
+
+        Args:
+            doc: Document dict with keys: id, title, type, content, etc.
+        """
+        content = doc.get("content", doc.get("text", ""))
+        title = doc.get("title", "")
+        doc_type = doc.get("type", "") or determine_document_type(title, content)
+
+        # Create document entity
+        doc_id = doc.get("id", title.replace(" ", "_")[:50])
+        doc_entity = LegalEntity(
+            id=doc_id,
+            type=doc_type.upper() if doc_type else "OTHER",
+            name=title or doc_id,
+            properties={
+                "effective_date": doc.get("effective_date", ""),
+                "issuer": doc.get("issuer", ""),
+                "law_number": doc.get("law_number", ""),
+                "status": doc.get("status", "active"),
+            },
+        )
+        self.add_entity(doc_entity)
+
+        # Extract entities
+        entities = self._entity_extractor.extract(content)
+        for entity in entities:
+            self.add_entity(entity)
+
+        # Extract relations
+        relations = self._relation_extractor.extract(content, doc_entity)
+        for relation in relations:
+            self.add_relation(relation)
+
+    def build_from_corpus(self, docs: list[dict]):
+        """Build graph from a list of legal documents."""
+        for doc in docs:
+            self.add_document(doc)
+
+    def is_valid(self, doc_id: str, as_of: Optional[str] = None) -> dict:
+        """Check if a document is still in force.
+
+        Args:
+            doc_id: Document node ID
+            as_of: Date string (optional, defaults to current)
+
+        Returns:
+            Dict with 'valid' (bool), 'status' (str), 'amended_by' (list)
+        """
+        if doc_id not in self.G:
+            return {"valid": False, "status": "not_found", "amended_by": []}
+
+        node = self.G.nodes[doc_id]
+        status = node.get("status", "unknown")
+
+        # Check for HET_HIEU_LUC edges pointing to this document
+        expired_by = []
+        for source, target, data in self.G.in_edges(doc_id, data=True):
+            if data.get("relation_type") == "HET_HIEU_LUC":
+                expired_by.append({"source": source, "evidence": data.get("evidence", "")})
+
+        # Check for SUA_DOI_BO_SUNG edges
+        amended_by = []
+        for source, target, data in self.G.in_edges(doc_id, data=True):
+            if data.get("relation_type") == "SUA_DOI_BO_SUNG":
+                amended_by.append({"source": source, "evidence": data.get("evidence", "")})
+
+        # Check for THAY_THE edges
+        replaced_by = []
+        for source, target, data in self.G.in_edges(doc_id, data=True):
+            if data.get("relation_type") == "THAY_THE":
+                replaced_by.append({"source": source, "evidence": data.get("evidence", "")})
+
+        is_valid = status != "expired" and len(expired_by) == 0 and len(replaced_by) == 0
+
+        return {
+            "valid": is_valid,
+            "status": status,
+            "expired_by": expired_by,
+            "amended_by": amended_by,
+            "replaced_by": replaced_by,
+        }
+
+    def amendment_chain(self, doc_id: str) -> list[dict]:
+        """Trace the full amendment chain for a document.
+
+        Returns list of amendments in chronological order.
+        """
+        chain = []
+        visited = set()
+        queue = [doc_id]
+
+        while queue:
+            current = queue.pop(0)
+            if current in visited:
+                continue
+            visited.add(current)
+
+            for source, target, data in self.G.in_edges(current, data=True):
+                if data.get("relation_type") in ("SUA_DOI_BO_SUNG", "THAY_THE"):
+                    chain.append({
+                        "amending_doc": source,
+                        "relation": data["relation_type"],
+                        "evidence": data.get("evidence", ""),
+                        "amended_doc": current,
+                    })
+                    queue.append(source)
+
+        return chain
+
+    def related_docs(self, doc_id: str, max_depth: int = 2) -> list[dict]:
+        """Find all documents related to a given document within max_depth hops."""
+        if doc_id not in self.G:
+            return []
+
+        related = []
+        for source, target in nx.bfs_edges(self.G, doc_id, depth_limit=max_depth):
+            data = self.G.edges[source, target]
+            related.append({
+                "source": source,
+                "target": target,
+                "relation": data.get("relation_type", ""),
+                "source_name": self.G.nodes[source].get("name", source),
+                "target_name": self.G.nodes[target].get("name", target),
+            })
+
+        # Also check reverse edges
+        for source, target in nx.bfs_edges(self.G.reverse(), doc_id, depth_limit=max_depth):
+            data = self.G.edges[target, source] if self.G.has_edge(target, source) else {}
+            related.append({
+                "source": target,
+                "target": source,
+                "relation": data.get("relation_type", ""),
+                "source_name": self.G.nodes[target].get("name", target),
+                "target_name": self.G.nodes[source].get("name", source),
+            })
+
+        return related
+
+    def reasoning_path(self, source_id: str, target_id: str) -> list[dict]:
+        """Find the shortest reasoning path between two legal entities."""
+        try:
+            path = nx.shortest_path(self.G, source_id, target_id)
+            edges = []
+            for i in range(len(path) - 1):
+                data = self.G.edges[path[i], path[i + 1]]
+                edges.append({
+                    "from": path[i],
+                    "to": path[i + 1],
+                    "relation": data.get("relation_type", ""),
+                    "from_name": self.G.nodes[path[i]].get("name", path[i]),
+                    "to_name": self.G.nodes[path[i + 1]].get("name", path[i + 1]),
+                })
+            return edges
+        except (nx.NetworkXNoPath, nx.NodeNotFound):
+            return []
+
+    def get_stats(self) -> dict:
+        """Get graph statistics."""
+        type_counts = {}
+        for node, data in self.G.nodes(data=True):
+            ntype = data.get("type", "UNKNOWN")
+            type_counts[ntype] = type_counts.get(ntype, 0) + 1
+
+        rel_counts = {}
+        for source, target, data in self.G.edges(data=True):
+            rtype = data.get("relation_type", "UNKNOWN")
+            rel_counts[rtype] = rel_counts.get(rtype, 0) + 1
+
+        return {
+            "nodes": self.G.number_of_nodes(),
+            "edges": self.G.number_of_edges(),
+            "node_types": type_counts,
+            "relation_types": rel_counts,
+        }
+
+    def save(self, path: Optional[str] = None):
+        """Save graph to pickle file."""
+        path = path or str(KG_PATH)
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as f:
+            pickle.dump(self.G, f)
+        print(f"Saved graph ({self.node_count} nodes, {self.edge_count} edges) -> {path}")
+
+    def load(self, path: Optional[str] = None):
+        """Load graph from pickle file."""
+        path = path or str(KG_PATH)
+        with open(path, "rb") as f:
+            self.G = pickle.load(f)
+        print(f"Loaded graph ({self.node_count} nodes, {self.edge_count} edges) <- {path}")
+</file>
+
+<file path="src/knowledge/reasoner.py">
+"""Legal Knowledge Graph reasoner.
+
+Provides high-level query functions:
+- is_valid(): Check if a document is still in force
+- amendment_chain(): Trace all amendments
+- related_docs(): Find related documents
+- reasoning_path(): Find path between two legal entities
+- explain(): Explain reasoning with evidence
+"""
+
+from dataclasses import dataclass
+from typing import Optional
+
+from src.knowledge.graph_builder import LegalKnowledgeGraph
+
+
+@dataclass
+class LegalAnswer:
+    """Structured answer from the knowledge graph reasoner."""
+    question: str
+    answer: str
+    evidence: list[dict]
+    confidence: float
+    source_entities: list[str]
+    reasoning_steps: list[str]
+
+
+class LegalReasoner:
+    """Reasoning engine over the legal knowledge graph."""
+
+    def __init__(self, kg: LegalKnowledgeGraph):
+        self.kg = kg
+
+    def check_validity(self, doc_id: str) -> LegalAnswer:
+        """Check if a legal document is still in force.
+
+        Traces amendment chain and expiration status.
+        """
+        result = self.kg.is_valid(doc_id)
+        doc_name = self.kg.G.nodes[doc_id].get("name", doc_id) if doc_id in self.kg.G else doc_id
+
+        if result["status"] == "not_found":
+            return LegalAnswer(
+                question=f"{doc_name} còn hiệu lực không?",
+                answer=f"Không tìm thấy văn bản '{doc_name}' trong cơ sở dữ liệu.",
+                evidence=[], confidence=0.0, source_entities=[doc_id], reasoning_steps=[],
+            )
+
+        steps = [f"Kiểm tra trạng thái của {doc_name}"]
+        evidence = []
+
+        if result["expired_by"]:
+            for item in result["expired_by"]:
+                steps.append(f"→ Đã hết hiệu lực bởi: {self.kg.G.nodes[item['source']].get('name', item['source'])}")
+                evidence.append({"type": "HET_HIEU_LUC", **item})
+            answer = f"{doc_name} đã HẾT HIỆU LỰC."
+        elif result["replaced_by"]:
+            for item in result["replaced_by"]:
+                steps.append(f"→ Đã được thay thế bởi: {self.kg.G.nodes[item['source']].get('name', item['source'])}")
+                evidence.append({"type": "THAY_THE", **item})
+            answer = f"{doc_name} đã được THAY THẾ."
+        elif result["amended_by"]:
+            for item in result["amended_by"]:
+                steps.append(f"→ Đã được sửa đổi/bổ sung bởi: {self.kg.G.nodes[item['source']].get('name', item['source'])}")
+                evidence.append({"type": "SUA_DOI_BO_SUNG", **item})
+            answer = f"{doc_name} CÒN HIỆU LỰC (đã được sửa đổi/bổ sung)."
+        else:
+            steps.append("→ Không có văn bản hết hiệu lực, thay thế, hoặc sửa đổi.")
+            answer = f"{doc_name} CÒN HIỆU LỰC."
+
+        return LegalAnswer(
+            question=f"{doc_name} còn hiệu lực không?",
+            answer=answer,
+            evidence=evidence,
+            confidence=0.9 if result["status"] != "unknown" else 0.5,
+            source_entities=[doc_id],
+            reasoning_steps=steps,
+        )
+
+    def trace_amendments(self, doc_id: str) -> LegalAnswer:
+        """Trace all amendments for a document."""
+        chain = self.kg.amendment_chain(doc_id)
+        doc_name = self.kg.G.nodes[doc_id].get("name", doc_id) if doc_id in self.kg.G else doc_id
+
+        if not chain:
+            return LegalAnswer(
+                question=f"Lịch sử sửa đổi của {doc_name}",
+                answer=f"{doc_name} chưa được sửa đổi/bổ sung.",
+                evidence=[], confidence=1.0, source_entities=[doc_id],
+                reasoning_steps=["Không tìm thấy chuỗi sửa đổi."],
+            )
+
+        steps = [f"Chuỗi sửa đổi của {doc_name}:"]
+        evidence = []
+        for i, item in enumerate(chain, 1):
+            amending_name = self.kg.G.nodes[item["amending_doc"]].get("name", item["amending_doc"])
+            relation = "sửa đổi/bổ sung" if item["relation"] == "SUA_DOI_BO_SUNG" else "thay thế"
+            steps.append(f"  {i}. {amending_name} {relation} {item.get('amended_doc', '?')}")
+            evidence.append(item)
+
+        answer = f"{doc_name} có {len(chain)} văn bản sửa đổi/bổ sung."
+
+        return LegalAnswer(
+            question=f"Lịch sử sửa đổi của {doc_name}",
+            answer=answer,
+            evidence=evidence,
+            confidence=0.85,
+            source_entities=[doc_id] + [item["amending_doc"] for item in chain],
+            reasoning_steps=steps,
+        )
+
+    def find_related(self, doc_id: str, max_depth: int = 2) -> LegalAnswer:
+        """Find all documents related to a given document."""
+        related = self.kg.related_docs(doc_id, max_depth)
+        doc_name = self.kg.G.nodes[doc_id].get("name", doc_id) if doc_id in self.kg.G else doc_id
+
+        if not related:
+            return LegalAnswer(
+                question=f"Văn bản liên quan đến {doc_name}",
+                answer=f"Không tìm thấy văn bản liên quan đến {doc_name}.",
+                evidence=[], confidence=0.3, source_entities=[doc_id],
+                reasoning_steps=["Không có liên kết trong đồ thị."],
+            )
+
+        steps = [f"Văn bản liên quan đến {doc_name}:"]
+        for item in related[:10]:
+            relation = item["relation"].replace("_", " ")
+            steps.append(f"  → {item['source_name']} --{relation}--> {item['target_name']}")
+
+        answer = f"Tìm thấy {len(related)} văn bản liên quan đến {doc_name}."
+
+        return LegalAnswer(
+            question=f"Văn bản liên quan đến {doc_name}",
+            answer=answer,
+            evidence=related,
+            confidence=0.8,
+            source_entities=[doc_id] + [item["source"] for item in related[:10]],
+            reasoning_steps=steps,
+        )
+
+    def find_reasoning_path(self, source_id: str, target_id: str) -> LegalAnswer:
+        """Find the reasoning path between two legal entities."""
+        path = self.kg.reasoning_path(source_id, target_id)
+        source_name = self.kg.G.nodes[source_id].get("name", source_id) if source_id in self.kg.G else source_id
+        target_name = self.kg.G.nodes[target_id].get("name", target_id) if target_id in self.kg.G else target_id
+
+        if not path:
+            return LegalAnswer(
+                question=f"Mối liên hệ giữa {source_name} và {target_name}",
+                answer=f"Không tìm thấy đường dẫn giữa {source_name} và {target_name}.",
+                evidence=[], confidence=0.1, source_entities=[source_id, target_id],
+                reasoning_steps=["Không có đường đi trong đồ thị."],
+            )
+
+        steps = [f"Đường dẫn từ {source_name} đến {target_name}:"]
+        for i, edge in enumerate(path, 1):
+            steps.append(f"  {i}. {edge['from_name']} --{edge['relation']}--> {edge['to_name']}")
+
+        answer = f"Đường dẫn pháp lý: {' → '.join(e['relation'] for e in path)}"
+
+        return LegalAnswer(
+            question=f"Mối liên hệ giữa {source_name} và {target_name}",
+            answer=answer,
+            evidence=path,
+            confidence=0.7,
+            source_entities=[source_id, target_id],
+            reasoning_steps=steps,
+        )
+</file>
+
+<file path="src/knowledge/visualizer.py">
+"""Knowledge Graph visualization using Pyvis + NetworkX."""
+
+from pathlib import Path
+from typing import Optional
+
+from src.knowledge.graph_builder import LegalKnowledgeGraph
+
+
+def visualize_graph(
+    kg: LegalKnowledgeGraph,
+    output_path: str = "legal_kg.html",
+    max_nodes: int = 100,
+    focus_node: Optional[str] = None,
+    height: str = "800px",
+):
+    """Create interactive HTML visualization of the legal knowledge graph.
+
+    Args:
+        kg: LegalKnowledgeGraph instance
+        output_path: Path to output HTML file
+        max_nodes: Max nodes to display (subgraph if larger)
+        focus_node: Center visualization on this node
+        height: Height of the visualization
+    """
+    try:
+        from pyvis.network import Network
+    except ImportError:
+        raise ImportError("pyvis not installed. Run: pip install pyvis")
+
+    import networkx as nx
+
+    # Select subgraph if too large
+    if kg.node_count > max_nodes:
+        if focus_node and focus_node in kg.G:
+            # Ego graph around focus node
+            subG = nx.ego_graph(kg.G, focus_node, radius=2)
+        else:
+            # Take most connected nodes
+            degree_dict = dict(kg.G.degree())
+            top_nodes = sorted(degree_dict, key=degree_dict.get, reverse=True)[:max_nodes]
+            subG = kg.G.subgraph(top_nodes)
+    else:
+        subG = kg.G
+
+    # Create Pyvis network
+    net = Network(
+        height=height,
+        width="100%",
+        directed=True,
+        notebook=False,
+        heading="Legal Knowledge Graph — Vietnamese Legal Documents",
+    )
+
+    # Add nodes with type-based styling
+    for node, data in subG.nodes(data=True):
+        ntype = data.get("type", "UNKNOWN")
+        color = kg.NODE_COLORS.get(ntype, "#999999")
+        label = data.get("name", node)
+        # Truncate long labels
+        if len(label) > 40:
+            label = label[:37] + "..."
+
+        title = f"Type: {ntype}\nName: {data.get('name', node)}"
+        if data.get("effective_date"):
+            title += f"\nEffective: {data['effective_date']}"
+        if data.get("issuer"):
+            title += f"\nIssuer: {data['issuer']}"
+
+        net.add_node(
+            node,
+            label=label,
+            title=title,
+            color=color,
+            size=max(10, min(50, subG.degree(node) * 5 + 10)),
+            group=ntype,
+        )
+
+    # Add edges with relation-based styling
+    for source, target, data in subG.edges(data=True):
+        rtype = data.get("relation_type", "")
+        color = kg.EDGE_COLORS.get(rtype, "#AAAAAA")
+        label = rtype.replace("_", " ") if rtype else ""
+        # Dashed line for destructive relations
+        dashes = rtype in ("HET_HIEU_LUC", "THAY_THE")
+
+        net.add_edge(
+            source, target,
+            label=label,
+            color=color,
+            dashes=dashes,
+            title=f"{source} → {target}\nRelation: {rtype}",
+        )
+
+    # Physics layout
+    net.force_atlas_2based()
+    net.show_buttons(filter_=["physics"])
+
+    # Save
+    output_path = str(Path(output_path))
+    net.save_graph(output_path)
+    print(f"Visualization saved → {output_path}")
+    return output_path
+
+
+def visualize_amendment_chain(kg: LegalKnowledgeGraph, doc_id: str, output_path: str = "amendment_chain.html"):
+    """Visualize the amendment chain for a specific document."""
+    try:
+        from pyvis.network import Network
+    except ImportError:
+        raise ImportError("pyvis not installed. Run: pip install pyvis")
+
+    # Get amendment chain
+    chain = kg.amendment_chain(doc_id)
+
+    # Build subgraph
+    nodes = {doc_id}
+    for item in chain:
+        nodes.add(item["amending_doc"])
+        nodes.add(item["amended_doc"])
+
+    if doc_id in kg.G:
+        nodes.add(doc_id)
+
+    subG = kg.G.subgraph([n for n in nodes if n in kg.G])
+
+    net = Network(
+        height="600px", width="100%", directed=True,
+        heading=f"Amendment Chain: {kg.G.nodes[doc_id].get('name', doc_id)}",
+    )
+
+    for node, data in subG.nodes(data=True):
+        ntype = data.get("type", "UNKNOWN")
+        color = kg.NODE_COLORS.get(ntype, "#999999")
+        net.add_node(node, label=data.get("name", node)[:30], color=color, group=ntype)
+
+    for source, target, data in subG.edges(data=True):
+        rtype = data.get("relation_type", "")
+        color = kg.EDGE_COLORS.get(rtype, "#AAAAAA")
+        net.add_edge(source, target, label=rtype.replace("_", " "), color=color)
+
+    net.force_atlas_2based()
+    net.save_graph(output_path)
+    print(f"Amendment chain visualization saved → {output_path}")
+</file>
+
+<file path="src/search/__init__.py">
+
+</file>
+
+<file path="src/search/bm25.py">
+"""M4 — BM25 ranking over InvertedIndex.
+
+Covers: Mon Thiet ke thuat toan — BM25 relevance scoring.
+score(D,Q) = Σ IDF(qi) * f(qi,D)*(k1+1) / (f(qi,D) + k1*(1-b+b*|D|/avgdl))
+Time: O(|Q| * avg_posting_list) per query
+"""
+
+import math
+from src.search.inverted_index import InvertedIndex
+
+
+class BM25:
+    """Okapi BM25 ranking for legal document search."""
+
+    def __init__(self, index: InvertedIndex, k1: float = 1.5, b: float = 0.75):
+        self._index = index
+        self.k1 = k1
+        self.b = b
+        self._idf: dict[str, float] = {}
+        self._compute_idf()
+
+    def _compute_idf(self):
+        """IDF(t) = log((N - df + 0.5) / (df + 0.5) + 1)"""
+        N = self._index.doc_count
+        for term in self._index._index:
+            df = len(self._index.search(term))
+            self._idf[term] = math.log((N - df + 0.5) / (df + 0.5) + 1.0)
+
+    def search(self, query: str, top_k: int = 10) -> list[dict]:
+        """Search and return top-k results ranked by BM25."""
+        terms = self._index._tokenize(query)
+        if not terms:
+            return []
+
+        candidates = set()
+        for t in terms:
+            for p in self._index.search(t):
+                candidates.add(p.doc_id)
+
+        scored = []
+        for doc_id in candidates:
+            score = self._score_doc(terms, doc_id)
+            if score > 0:
+                meta = self._index.get_document_info(doc_id)
+                scored.append({"doc_id": doc_id, "score": round(score, 4), **meta})
+
+        scored.sort(key=lambda x: x["score"], reverse=True)
+        return scored[:top_k]
+
+    def _score_doc(self, terms: list[str], doc_id: int) -> float:
+        """BM25 score for one document."""
+        score = 0.0
+        doc_len = self._index._doc_lengths.get(doc_id, 0)
+        avgdl = self._index.avg_doc_length
+
+        for term in terms:
+            idf = self._idf.get(term, 0)
+            tf = 0
+            for p in self._index.search(term):
+                if p.doc_id == doc_id:
+                    tf = p.term_frequency()
+                    break
+            if tf == 0:
+                continue
+
+            num = tf * (self.k1 + 1)
+            den = tf + self.k1 * (1 - self.b + self.b * doc_len / avgdl)
+            score += idf * num / den
+
+        return score
+
+    def explain(self, query: str, doc_id: int) -> dict:
+        """Breakdown BM25 score for explainability."""
+        terms = self._index._tokenize(query)
+        doc_len = self._index._doc_lengths.get(doc_id, 0)
+        avgdl = self._index.avg_doc_length
+
+        breakdown = []
+        total = 0.0
+        for term in terms:
+            idf = self._idf.get(term, 0)
+            tf = 0
+            for p in self._index.search(term):
+                if p.doc_id == doc_id:
+                    tf = p.term_frequency()
+                    break
+            if tf == 0:
+                breakdown.append({"term": term, "idf": round(idf, 4), "tf": 0, "score": 0})
+                continue
+            num = tf * (self.k1 + 1)
+            den = tf + self.k1 * (1 - self.b + self.b * doc_len / avgdl)
+            ts = idf * num / den
+            total += ts
+            breakdown.append({"term": term, "idf": round(idf, 4), "tf": tf, "score": round(ts, 4)})
+
+        return {"doc_id": doc_id, "total": round(total, 4), "breakdown": breakdown}
+</file>
+
+<file path="src/search/inverted_index.py">
+"""M4 — Inverted index for Vietnamese legal document search.
+
+Covers: Mon Thiet ke thuat toan — Inverted index data structure.
+Hash map + sorted posting lists with positional information.
+Time: Build O(N*L), Term search O(k), AND search O(min posting lists)
+"""
+
+import re
+import json
+from collections import defaultdict
+from pathlib import Path
+from typing import Optional
+
+
+class Posting:
+    """Posting entry: doc_id + term positions."""
+
+    __slots__ = ("doc_id", "positions")
+
+    def __init__(self, doc_id: int, position: int):
+        self.doc_id = doc_id
+        self.positions = [position]
+
+    def add_position(self, position: int):
+        self.positions.append(position)
+
+    def term_frequency(self) -> int:
+        return len(self.positions)
+
+
+class InvertedIndex:
+    """Inverted index with positional posting lists for Vietnamese legal text."""
+
+    def __init__(self):
+        self._index: dict[str, list[Posting]] = defaultdict(list)
+        self._doc_count = 0
+        self._doc_lengths: dict[int, int] = {}
+        self._doc_metadata: dict[int, dict] = {}
+
+    @property
+    def doc_count(self) -> int:
+        return self._doc_count
+
+    @property
+    def vocabulary_size(self) -> int:
+        return len(self._index)
+
+    @property
+    def avg_doc_length(self) -> float:
+        if not self._doc_lengths:
+            return 0.0
+        return sum(self._doc_lengths.values()) / len(self._doc_lengths)
+
+    def add_document(self, content: str, metadata: Optional[dict] = None) -> int:
+        """Index a document. Returns its doc_id."""
+        doc_id = self._doc_count
+        self._doc_count += 1
+        if metadata:
+            self._doc_metadata[doc_id] = metadata
+
+        tokens = self._tokenize(content)
+        self._doc_lengths[doc_id] = len(tokens)
+
+        seen = {}
+        for pos, token in enumerate(tokens):
+            if token in seen:
+                seen[token].add_position(pos)
+            else:
+                posting = Posting(doc_id, pos)
+                self._index[token].append(posting)
+                seen[token] = posting
+
+        return doc_id
+
+    def search(self, term: str) -> list[Posting]:
+        """Single term lookup: O(k) where k = postings for term."""
+        return self._index.get(term.lower(), [])
+
+    def search_and(self, terms: list[str]) -> list[int]:
+        """Boolean AND: docs containing ALL terms."""
+        if not terms:
+            return []
+        sets = [set(p.doc_id for p in self.search(t)) for t in terms]
+        result = sets[0]
+        for s in sets[1:]:
+            result &= s
+        return sorted(result)
+
+    def search_or(self, terms: list[str]) -> list[int]:
+        """Boolean OR: docs containing ANY term."""
+        ids = set()
+        for t in terms:
+            for p in self.search(t):
+                ids.add(p.doc_id)
+        return sorted(ids)
+
+    def search_not(self, include: list[str], exclude: list[str]) -> list[int]:
+        """AND NOT: docs with include terms but without exclude terms."""
+        included = set(self.search_and(include))
+        for t in exclude:
+            for p in self.search(t):
+                included.discard(p.doc_id)
+        return sorted(included)
+
+    def search_phrase(self, phrase: str) -> list[int]:
+        """Phrase search: consecutive terms in order."""
+        tokens = self._tokenize(phrase)
+        if not tokens:
+            return []
+        if len(tokens) == 1:
+            return [p.doc_id for p in self.search(tokens[0])]
+
+        # Start with first term postings
+        candidates = {}
+        for p in self.search(tokens[0]):
+            candidates[p.doc_id] = set(p.positions)
+
+        for offset, token in enumerate(tokens[1:], 1):
+            postings = self.search(token)
+            new_candidates = {}
+            for p in postings:
+                if p.doc_id in candidates:
+                    # Check for consecutive positions
+                    matching = candidates[p.doc_id] & {pos - offset for pos in p.positions}
+                    if matching:
+                        new_candidates[p.doc_id] = {pos + offset for pos in matching}
+            candidates = new_candidates
+            if not candidates:
+                return []
+
+        return sorted(candidates.keys())
+
+    def get_document_info(self, doc_id: int) -> dict:
+        return self._doc_metadata.get(doc_id, {"doc_id": doc_id})
+
+    def _tokenize(self, text: str) -> list[str]:
+        """Tokenize Vietnamese text preserving diacritics."""
+        text = text.lower()
+        text = re.sub(r'[^\w\sàáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]', ' ', text)
+        return [t for t in text.split() if t]
+
+    def save(self, path: str):
+        """Serialize to JSON."""
+        data = {
+            "doc_count": self._doc_count,
+            "doc_lengths": self._doc_lengths,
+            "doc_metadata": self._doc_metadata,
+            "index": {
+                term: [{"doc_id": p.doc_id, "positions": p.positions} for p in postings]
+                for term, postings in self._index.items()
+            },
+        }
+        Path(path).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    def load(self, path: str):
+        """Load from JSON."""
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        self._doc_count = data["doc_count"]
+        self._doc_lengths = {int(k): v for k, v in data["doc_lengths"].items()}
+        self._doc_metadata = {int(k): v for k, v in data["doc_metadata"].items()}
+        self._index = defaultdict(list)
+        for term, postings in data["index"].items():
+            for p in postings:
+                posting = Posting(p["doc_id"], p["positions"][0])
+                posting.positions = p["positions"]
+                self._index[term].append(posting)
+</file>
+
+<file path="src/search/search_engine.py">
+"""M4 — Unified search engine combining InvertedIndex + BM25 + Trie + Fuzzy."""
+
+from src.search.inverted_index import InvertedIndex
+from src.search.bm25 import BM25
+from src.search.trie import Trie, levenshtein, fuzzy_search
+
+
+class LegalSearchEngine:
+    """End-to-end search engine for Vietnamese legal documents.
+
+    Combines:
+    - InvertedIndex for term lookup and boolean queries
+    - BM25 for relevance ranking
+    - Trie for autocomplete
+    - Levenshtein for fuzzy matching
+    """
+
+    def __init__(self):
+        self.index = InvertedIndex()
+        self.bm25: BM25 | None = None
+        self.trie = Trie()
+        self._built = False
+
+    def add_document(self, content: str, metadata: dict | None = None) -> int:
+        """Add a legal document to the search engine."""
+        doc_id = self.index.add_document(content, metadata)
+        return doc_id
+
+    def build(self):
+        """Build BM25 index and Trie from the inverted index."""
+        self.bm25 = BM25(self.index)
+        for term in self.index._index:
+            postings = self.index.search(term)
+            doc_freq = len(postings)
+            total_freq = sum(p.term_frequency() for p in postings)
+            self.trie.insert(term, freq=total_freq, doc_freq=doc_freq)
+        self._built = True
+
+    def search(self, query: str, top_k: int = 10) -> list[dict]:
+        """Ranked search using BM25."""
+        if not self._built:
+            self.build()
+        return self.bm25.search(query, top_k)
+
+    def boolean_search(self, query: str, mode: str = "and") -> list[int]:
+        """Boolean search: 'and', 'or', or phrase."""
+        terms = self.index._tokenize(query)
+        if mode == "or":
+            return self.index.search_or(terms)
+        if mode == "phrase":
+            return self.index.search_phrase(query)
+        return self.index.search_and(terms)
+
+    def autocomplete(self, prefix: str, max_results: int = 10) -> list[dict]:
+        """Autocomplete suggestions for a prefix."""
+        return self.trie.autocomplete(prefix, max_results)
+
+    def fuzzy(self, word: str, max_dist: int = 2, max_results: int = 5) -> list[dict]:
+        """Find similar words using edit distance."""
+        vocab = list(self.index._index.keys())
+        return fuzzy_search(word, vocab, max_dist, max_results)
+
+    def explain(self, query: str, doc_id: int) -> dict:
+        """Explain why a document matched a query (BM25 breakdown)."""
+        if not self._built:
+            self.build()
+        return self.bm25.explain(query, doc_id)
+</file>
+
+<file path="src/search/trie.py">
+"""M4 — Trie for autocomplete + Levenshtein fuzzy search.
+
+Covers: Mon Thiet ke thuat toan — Trie (prefix tree) + edit distance.
+Time: Insert O(m), Prefix search O(m), Autocomplete O(m+k)
+Levenshtein: O(m*n) DP
+"""
+
+from typing import Optional
+
+
+class TrieNode:
+    __slots__ = ("children", "is_end", "freq", "doc_freq")
+
+    def __init__(self):
+        self.children: dict[str, "TrieNode"] = {}
+        self.is_end: bool = False
+        self.freq: int = 0
+        self.doc_freq: int = 0
+
+
+class Trie:
+    """Trie for Vietnamese legal term autocomplete."""
+
+    def __init__(self):
+        self.root = TrieNode()
+        self._total = 0
+
+    def insert(self, word: str, freq: int = 1, doc_freq: int = 0):
+        """Insert word with corpus frequency. O(m) where m=len(word)."""
+        node = self.root
+        for ch in word.lower():
+            if ch not in node.children:
+                node.children[ch] = TrieNode()
+            node = node.children[ch]
+        if not node.is_end:
+            self._total += 1
+        node.is_end = True
+        node.freq += freq
+        node.doc_freq += doc_freq
+
+    def search_exact(self, word: str) -> Optional[TrieNode]:
+        node = self.root
+        for ch in word.lower():
+            if ch not in node.children:
+                return None
+            node = node.children[ch]
+        return node if node.is_end else None
+
+    def autocomplete(self, prefix: str, max_results: int = 10) -> list[dict]:
+        """Prefix completion. O(m + k) where m=prefix len, k=results."""
+        node = self.root
+        for ch in prefix.lower():
+            if ch not in node.children:
+                return []
+            node = node.children[ch]
+
+        results = []
+        self._collect(node, prefix.lower(), results)
+        results.sort(key=lambda x: x["freq"], reverse=True)
+        return results[:max_results]
+
+    def _collect(self, node: TrieNode, current: str, results: list):
+        if node.is_end:
+            results.append({"word": current, "freq": node.freq, "doc_freq": node.doc_freq})
+        for ch, child in node.children.items():
+            self._collect(child, current + ch, results)
+
+
+def levenshtein(s1: str, s2: str, max_dist: Optional[int] = None) -> int:
+    """Levenshtein edit distance. O(m*n) DP.
+
+    Args:
+        s1, s2: strings to compare
+        max_dist: early termination threshold (None = no limit)
+    """
+    m, n = len(s1), len(s2)
+    if max_dist is not None and abs(m - n) > max_dist:
+        return max_dist + 1
+
+    prev = list(range(n + 1))
+    curr = [0] * (n + 1)
+
+    for i in range(1, m + 1):
+        curr[0] = i
+        row_min = curr[0]
+        for j in range(1, n + 1):
+            cost = 0 if s1[i - 1] == s2[j - 1] else 1
+            curr[j] = min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost)
+            row_min = min(row_min, curr[j])
+        if max_dist is not None and row_min > max_dist:
+            return max_dist + 1
+        prev, curr = curr, prev
+
+    return prev[n]
+
+
+def fuzzy_search(word: str, vocabulary: list[str], max_dist: int = 2, max_results: int = 5) -> list[dict]:
+    """Find closest vocabulary words within edit distance.
+
+    Time: O(V * m * n) where V = vocab size, m,n = string lengths
+    For production: use BK-tree or Levenshtein automaton for O(log V * m * n)
+    """
+    results = []
+    for v in vocabulary:
+        d = levenshtein(word.lower(), v.lower(), max_dist=max_dist)
+        if d <= max_dist:
+            results.append({"word": v, "distance": d})
+    results.sort(key=lambda x: x["distance"])
+    return results[:max_results]
+</file>
+
+<file path="src/summarizer/__init__.py">
+
+</file>
+
+<file path="src/summarizer/sentence_scorer.py">
+"""PhoBERT Sentence Scorer for extractive summarization.
+
+Head 3 of the PhoBERT fine-tuning pipeline.
+Architecture: PhoBERT encoder → mean pooling → concat[sent, doc, sent*doc] → Linear → score
+
+Training: Binary classification (sentence in summary / not in summary)
+Loss: BCEWithLogitsLoss
+"""
+
+import torch
+import torch.nn as nn
+from transformers import AutoModel, AutoTokenizer
+
+
+class PhoBERTSentenceScorer(nn.Module):
+    """Score sentence importance for extractive summarization.
+
+    Given a sentence and its document context, predicts whether
+    the sentence should be included in the summary.
+
+    Architecture:
+        1. Encode sentence and document with PhoBERT
+        2. Mean pool each encoding
+        3. Concatenate: [sent_emb, doc_emb, sent_emb * doc_emb]
+        4. Feed through pre-classifier (768*3 → 768) + dropout + regression head
+
+    Input dimension: 768 * 3 = 2304 (concat of sent, doc, element-wise product)
+    Output dimension: 1 (importance score)
+    """
+
+    def __init__(self, model_name: str = "vinai/phobert-base", hidden_size: int = 768):
+        super().__init__()
+        self.phobert = AutoModel.from_pretrained(model_name)
+        self.pre_classifier = nn.Linear(hidden_size * 3, hidden_size)
+        self.dropout = nn.Dropout(0.3)
+        self.regression_head = nn.Linear(hidden_size, 1)
+
+    def _mean_pooling(self, model_output, attention_mask):
+        """Mean pooling over token embeddings, respecting attention mask."""
+        token_embeddings = model_output.last_hidden_state
+        mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+        sum_embeddings = torch.sum(token_embeddings * mask_expanded, dim=1)
+        sum_mask = torch.clamp(mask_expanded.sum(dim=1), min=1e-9)
+        return sum_embeddings / sum_mask
+
+    def forward(self, sent_ids, sent_mask, doc_ids, doc_mask):
+        """Forward pass.
+
+        Args:
+            sent_ids: Token IDs for the sentence (batch, seq_len)
+            sent_mask: Attention mask for the sentence (batch, seq_len)
+            doc_ids: Token IDs for the document (batch, seq_len)
+            doc_mask: Attention mask for the document (batch, seq_len)
+
+        Returns:
+            Tensor of shape (batch, 1) with raw importance scores
+        """
+        # Encode sentence and document
+        sent_output = self.phobert(input_ids=sent_ids, attention_mask=sent_mask)
+        doc_output = self.phobert(input_ids=doc_ids, attention_mask=doc_mask)
+
+        # Mean pool
+        sent_emb = self._mean_pooling(sent_output, sent_mask)
+        doc_emb = self._mean_pooling(doc_output, doc_mask)
+
+        # Combine: [sent, doc, sent * doc]
+        combined = torch.cat([sent_emb, doc_emb, sent_emb * doc_emb], dim=1)
+
+        # Feed through classifier
+        x = torch.nn.ReLU()(self.pre_classifier(combined))
+        x = self.dropout(x)
+        score = self.regression_head(x)
+
+        return score
+
+    def score_sentences(self, sentences: list[str], document: str, tokenizer, max_length: int = 256):
+        """Score all sentences in a document for summary inclusion.
+
+        Args:
+            sentences: List of sentences to score
+            document: Full document text (for context)
+            tokenizer: PhoBERT tokenizer
+            max_length: Max token length
+
+        Returns:
+            List of float scores, one per sentence
+        """
+        self.eval()
+        scores = []
+
+        with torch.no_grad():
+            # Encode document once
+            doc_enc = tokenizer(
+                document, max_length=max_length, truncation=True,
+                padding="max_length", return_tensors="pt"
+            )
+            doc_ids = doc_enc["input_ids"].to(next(self.parameters()).device)
+            doc_mask = doc_enc["attention_mask"].to(next(self.parameters()).device)
+
+            for sentence in sentences:
+                sent_enc = tokenizer(
+                    sentence, max_length=max_length, truncation=True,
+                    padding="max_length", return_tensors="pt"
+                )
+                sent_ids = sent_enc["input_ids"].to(next(self.parameters()).device)
+                sent_mask = sent_enc["attention_mask"].to(next(self.parameters()).device)
+
+                score = self.forward(sent_ids, sent_mask, doc_ids, doc_mask)
+                scores.append(score.item())
+
+        return scores
+</file>
+
+<file path="src/summarizer/summarizer.py">
+"""Legal text summarizer combining PhoBERT relevance + TextRank centrality + position.
+
+The complete extractive summarization pipeline:
+1. Split document into sentences
+2. Encode sentences with PhoBERT
+3. Score each sentence: relevance(query, sent) + centrality(TextRank) + position
+4. Select top-K sentences by combined score
+5. Reorder by original position and return summary
+"""
+
+from src.common.config import SUMMARY_WEIGHTS, SEARCH_TOP_K
+from src.common.text_processor import segment_sentences, segment_text
+from src.summarizer.textrank import (
+    build_similarity_matrix, textrank, compute_position_scores, select_sentences,
+)
+from src.summarizer.sentence_scorer import PhoBERTSentenceScorer
+
+
+class LegalSummarizer:
+    """Extractive summarizer for Vietnamese legal documents.
+
+    Uses PhoBERT for relevance scoring + TextRank for centrality + position bonus.
+    """
+
+    def __init__(self, model_path: str = None, model_name: str = "vinai/phobert-base"):
+        self.tokenizer = None
+        self.scorer = None
+        self.model_name = model_name
+        self.model_path = model_path
+        self.weights = SUMMARY_WEIGHTS
+
+    def _load_model(self):
+        """Lazy-load model and tokenizer."""
+        if self.scorer is not None:
+            return
+
+        from transformers import AutoTokenizer
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+
+        self.scorer = PhoBERTSentenceScorer(self.model_name)
+        if self.model_path:
+            import torch
+            state_dict = torch.load(self.model_path, map_location="cpu")
+            self.scorer.load_state_dict(state_dict)
+        self.scorer.eval()
+
+    def summarize(
+        self,
+        document: str,
+        query: str = "",
+        top_k: int = 4,
+        min_gap: int = 0,
+        use_model: bool = True,
+    ) -> dict:
+        """Summarize a legal document.
+
+        Args:
+            document: Full document text
+            query: User question (for relevance scoring). If empty, uses centrality only.
+            top_k: Number of sentences to include in summary
+            min_gap: Minimum gap between selected sentences (0 = no constraint)
+            use_model: Whether to use PhoBERT scorer (False = TextRank only)
+
+        Returns:
+            Dict with 'summary', 'scores', 'selected_indices', 'sentences'
+        """
+        # Step 1: Split into sentences
+        sentences = segment_sentences(document)
+        if len(sentences) <= top_k:
+            return {
+                "summary": " ".join(sentences),
+                "sentences": sentences,
+                "selected_indices": list(range(len(sentences))),
+                "scores": {"relevance": [1.0] * len(sentences),
+                          "centrality": [1.0] * len(sentences),
+                          "position": [1.0] * len(sentences)},
+            }
+
+        # Step 2: Score sentences
+        relevance_scores = self._compute_relevance(sentences, query, use_model)
+        centrality_scores = self._compute_centrality(sentences, use_model)
+        position_scores = compute_position_scores(len(sentences))
+
+        # Step 3: Select top-K
+        selected = select_sentences(
+            relevance_scores, centrality_scores, position_scores,
+            weights=self.weights, top_k=top_k, min_gap=min_gap,
+        )
+
+        # Step 4: Build summary (in original order)
+        summary = " ".join(sentences[i] for i in selected)
+
+        return {
+            "summary": summary,
+            "sentences": sentences,
+            "selected_indices": selected,
+            "scores": {
+                "relevance": relevance_scores.tolist() if hasattr(relevance_scores, 'tolist') else list(relevance_scores),
+                "centrality": centrality_scores.tolist() if hasattr(centrality_scores, 'tolist') else list(centrality_scores),
+                "position": position_scores.tolist() if hasattr(position_scores, 'tolist') else list(position_scores),
+            },
+        }
+
+    def _compute_relevance(self, sentences: list[str], query: str, use_model: bool):
+        """Compute relevance scores for each sentence relative to query."""
+        import numpy as np
+
+        if not query:
+            return np.ones(len(sentences))
+
+        if use_model:
+            try:
+                self._load_model()
+                model_scores = self.scorer.score_sentences(sentences, query, self.tokenizer)
+                return np.array(model_scores)
+            except Exception:
+                pass  # Fall back to TF-IDF cosine
+
+        # Fallback: TF-IDF cosine similarity
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        all_texts = [query] + sentences
+        vectorizer = TfidfVectorizer(max_features=5000)
+        tfidf_matrix = vectorizer.fit_transform(all_texts)
+        query_vec = tfidf_matrix[0]
+        sent_vecs = tfidf_matrix[1:]
+
+        from sklearn.metrics.pairwise import cosine_similarity
+        similarities = cosine_similarity(query_vec, sent_vecs).flatten()
+        return similarities
+
+    def _compute_centrality(self, sentences: list[str], use_model: bool):
+        """Compute TextRank centrality scores."""
+        import numpy as np
+
+        if use_model:
+            try:
+                self._load_model()
+                # Use PhoBERT embeddings for similarity
+                embeddings = []
+                for sent in sentences:
+                    enc = self.tokenizer(sent, max_length=256, truncation=True,
+                                        padding="max_length", return_tensors="pt")
+                    with __import__('torch').no_grad():
+                        output = self.scorer.phobert(input_ids=enc["input_ids"],
+                                                     attention_mask=enc["attention_mask"])
+                    emb = self.scorer._mean_pooling(output, enc["attention_mask"])
+                    embeddings.append(emb.squeeze().numpy())
+            except Exception:
+                embeddings = None
+        else:
+            embeddings = None
+
+        if embeddings is None or len(embeddings[0]) == 0:
+            # Fallback: TF-IDF embeddings for TextRank
+            from sklearn.feature_extraction.text import TfidfVectorizer
+            vectorizer = TfidfVectorizer(max_features=5000)
+            tfidf_matrix = vectorizer.fit_transform(sentences)
+            embeddings = tfidf_matrix.toarray()
+
+        sim_matrix = build_similarity_matrix(embeddings if isinstance(embeddings, list) and isinstance(embeddings[0], np.ndarray) else [e.flatten() for e in embeddings])
+        scores = textrank(sim_matrix)
+        return scores
+</file>
+
+<file path="src/summarizer/textrank.py">
+"""TextRank centrality scoring for extractive summarization.
+
+Computes PageRank on a sentence similarity graph to identify
+the most central/important sentences in a document.
+
+Time complexity: O(n²) for similarity matrix + O(n·k) for PageRank iterations
+where n = number of sentences, k = number of iterations (typically converges in <50)
+"""
+
+import numpy as np
+from typing import Optional
+
+
+def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+    """Compute cosine similarity between two vectors."""
+    norm_a = np.linalg.norm(a)
+    norm_b = np.linalg.norm(b)
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return float(np.dot(a, b) / (norm_a * norm_b))
+
+
+def build_similarity_matrix(embeddings: list[np.ndarray], threshold: float = 0.1) -> np.ndarray:
+    """Build sentence similarity matrix from embeddings.
+
+    Args:
+        embeddings: List of sentence embedding vectors
+        threshold: Minimum similarity to include edge (prunes weak connections)
+
+    Returns:
+        n×n adjacency matrix with cosine similarities
+    """
+    n = len(embeddings)
+    sim_matrix = np.zeros((n, n))
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            sim = cosine_similarity(embeddings[i], embeddings[j])
+            if sim >= threshold:
+                sim_matrix[i][j] = sim
+                sim_matrix[j][i] = sim
+
+    return sim_matrix
+
+
+def textrank(
+    sim_matrix: np.ndarray,
+    damping: float = 0.85,
+    max_iter: int = 100,
+    tolerance: float = 1e-5,
+) -> np.ndarray:
+    """Run PageRank on the sentence similarity graph.
+
+    Args:
+        sim_matrix: n×n similarity matrix
+        damping: Damping factor (0.85 default, same as original PageRank)
+        max_iter: Maximum iterations
+        tolerance: Convergence tolerance
+
+    Returns:
+        Array of TextRank scores, one per sentence
+    """
+    n = sim_matrix.shape[0]
+    if n == 0:
+        return np.array([])
+    if n == 1:
+        return np.array([1.0])
+
+    # Normalize similarity matrix (row-stochastic transition matrix)
+    row_sums = sim_matrix.sum(axis=1, keepdims=True)
+    row_sums[row_sums == 0] = 1  # avoid division by zero
+    transition = sim_matrix / row_sums
+
+    # Initialize scores uniformly
+    scores = np.ones(n) / n
+
+    # Power iteration
+    for _ in range(max_iter):
+        new_scores = (1 - damping) / n + damping * transition.T @ scores
+        if np.abs(new_scores - scores).sum() < tolerance:
+            break
+        scores = new_scores
+
+    return scores
+
+
+def compute_position_scores(num_sentences: int, first_bonus: float = 0.3) -> np.ndarray:
+    """Compute position-based scores for sentences.
+
+    First sentences in a document/section get higher scores.
+    Based on the observation that legal documents often state
+    key provisions early.
+
+    Args:
+        num_sentences: Total number of sentences
+        first_bonus: Score bonus for the first sentence
+
+    Returns:
+        Array of position scores, normalized to [0, 1]
+    """
+    positions = np.arange(num_sentences, dtype=float)
+    # Inverse position: earlier = higher score
+    scores = 1.0 / (1.0 + positions * 0.1)
+    # Bonus for very first sentences
+    scores[0] += first_bonus
+    if num_sentences > 1:
+        scores[1] += first_bonus * 0.5
+    # Normalize to [0, 1]
+    if scores.max() > 0:
+        scores = scores / scores.max()
+    return scores
+
+
+def select_sentences(
+    relevance_scores: np.ndarray,
+    centrality_scores: np.ndarray,
+    position_scores: np.ndarray,
+    weights: dict = None,
+    top_k: int = 4,
+    min_gap: int = 0,
+) -> list[int]:
+    """Select top-K sentences using combined scoring.
+
+    Final score = w_rel * relevance + w_cen * centrality + w_pos * position
+
+    Args:
+        relevance_scores: Query-sentence cosine similarity scores
+        centrality_scores: TextRank PageRank scores
+        position_scores: Position-based scores
+        weights: Dict with 'relevance', 'centrality', 'position' weights
+        top_k: Number of sentences to select
+        min_gap: Minimum sentence gap (avoid selecting adjacent sentences)
+
+    Returns:
+        List of sentence indices in original order
+    """
+    if weights is None:
+        weights = {"relevance": 0.4, "centrality": 0.4, "position": 0.2}
+
+    combined = (
+        weights["relevance"] * relevance_scores
+        + weights["centrality"] * centrality_scores
+        + weights["position"] * position_scores
+    )
+
+    # Select top-K by score, then reorder by original position
+    selected = []
+    for idx in np.argsort(combined)[::-1]:
+        if len(selected) >= top_k:
+            break
+        # Skip if too close to already selected sentences
+        if min_gap > 0 and any(abs(idx - s) <= min_gap for s in selected):
+            continue
+        selected.append(idx)
+
+    # Return in original document order
+    return sorted(selected)
+</file>
+
+<file path="src/__init__.py">
+
+</file>
+
+<file path="src/ui.py">
+"""Streamlit UI for LegalAI Platform — 4 module demo in 1 interface."""
+
+import sys
+from pathlib import Path
+
+# Ensure project root is in path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+import streamlit as st
+import requests
+
+API_URL = "http://localhost:8000"
+
+st.set_page_config(page_title="LegalAI", page_icon="⚖️", layout="wide")
+st.title("⚖️ LegalAI — Trợ lý Pháp luật Thông minh")
+st.caption("4 mô-đun: Chatbot (NLP) → Tìm kiếm (TT) → Tóm tắt (Python ML) → Đồ thị kiến thức (AI)")
+
+# ── Sidebar ────────────────────────────────────────────
+with st.sidebar:
+    st.header("⚙️ Cài đặt")
+    api_status = st.session_state.get("api_status", "unknown")
+    try:
+        resp = requests.get(f"{API_URL}/health", timeout=2)
+        api_status = "✅ Connected" if resp.status_code == 200 else "❌ Error"
+    except Exception:
+        api_status = "❌ Offline"
+    st.write(f"API: {api_status}")
+
+    st.markdown("---")
+    st.markdown("""
+    **Mô-đun:**
+    1. 🤖 Chatbot — Hỏi đáp pháp luật (NLP)
+    2. 🔍 Tìm kiếm — BM25 + Trie (Thiết kế TT)
+    3. 📝 Tóm tắt — PhoBERT scoring (Python ML)
+    4. 🕸️ Đồ thị — Knowledge graph (AI)
+    """)
+
+# ── Main tabs ──────────────────────────────────────────
+tab1, tab2, tab3, tab4 = st.tabs(["🤖 Hỏi đáp", "🔍 Tìm kiếm", "📝 Tóm tắt", "🕸️ Đồ thị kiến thức"])
+
+# ── Tab 1: Chatbot ─────────────────────────────────────
+with tab1:
+    st.header("🤖 Hỏi đáp pháp luật")
+    question = st.text_input("Nhập câu hỏi:", placeholder="Thông tư 99 quy định gì về chế độ kế toán?")
+
+    if st.button("Hỏi", key="chat_btn") and question:
+        with st.spinner("Đang xử lý..."):
+            try:
+                resp = requests.post(f"{API_URL}/chat", json={"question": question, "top_k": 5}, timeout=30)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    st.markdown(f"**Trả lời:** {data['answer']}")
+                    st.caption(f"Intent: {data['intent']} (độ tin cậy: {data['confidence']:.2f})")
+
+                    if data.get("entities"):
+                        st.markdown("**Thực thể nhận diện:**")
+                        for ent in data["entities"]:
+                            st.markdown(f"- {ent.get('entity', '')}: {ent.get('text', '')}")
+
+                    if data.get("summary"):
+                        st.markdown("**Tóm tắt:**")
+                        st.info(data["summary"])
+
+                    if data.get("reasoning"):
+                        st.markdown("**Luận lý:**")
+                        for step in data["reasoning"]:
+                            st.markdown(f"- {step}")
+                else:
+                    st.error(f"Lỗi API: {resp.status_code}")
+            except requests.ConnectionError:
+                st.error("Không kết nối được API. Chạy: `python -m uvicorn src.app:app --port 8000`")
+
+# ── Tab 2: Search ─────────────────────────────────────
+with tab2:
+    st.header("🔍 Tìm kiếm văn bản pháp luật")
+    query = st.text_input("Truy vấn:", placeholder="chế độ kế toán doanh nghiệp")
+    top_k = st.slider("Số kết quả:", 1, 20, 5)
+
+    if st.button("Tìm kiếm", key="search_btn") and query:
+        with st.spinner("Đang tìm..."):
+            try:
+                resp = requests.post(f"{API_URL}/search", json={"query": query, "top_k": top_k}, timeout=10)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    results = data.get("results", [])
+                    if results:
+                        for i, r in enumerate(results, 1):
+                            st.markdown(f"**{i}.** {r.get('title', r.get('doc_id', 'N/A'))}")
+                            st.markdown(f"   Score: {r.get('score', 0):.4f}")
+                            if r.get("type"):
+                                st.caption(f"   Loại: {r['type']}")
+                    else:
+                        st.warning("Không tìm thấy kết quả.")
+                else:
+                    st.error(f"Lỗi API: {resp.status_code}")
+            except requests.ConnectionError:
+                st.error("Không kết nối được API.")
+
+    # Autocomplete demo
+    st.markdown("---")
+    prefix = st.text_input("Gợi ý tự động:", placeholder="Thông tư...")
+    if prefix and len(prefix) >= 2:
+        try:
+            resp = requests.post(f"{API_URL}/search/autocomplete?prefix={prefix}", timeout=5)
+            if resp.status_code == 200:
+                suggestions = resp.json().get("suggestions", [])
+                for s in suggestions[:5]:
+                    st.markdown(f"- {s['word']} (tf={s.get('freq', '?')})")
+        except Exception:
+            pass
+
+# ── Tab 3: Summarize ───────────────────────────────────
+with tab3:
+    st.header("📝 Tóm tắt văn bản pháp luật")
+    doc_text = st.text_area("Văn bản:", height=200, placeholder="Dán văn bản pháp luật vào đây...")
+    summary_query = st.text_input("Câu hỏi liên quan (tùy chọn):", placeholder="Quy định gì về kế toán?")
+    num_sentences = st.slider("Số câu tóm tắt:", 1, 10, 4)
+
+    if st.button("Tóm tắt", key="sum_btn") and doc_text:
+        with st.spinner("Đang tóm tắt..."):
+            try:
+                resp = requests.post(f"{API_URL}/summarize", json={
+                    "document": doc_text,
+                    "query": summary_query,
+                    "top_k": num_sentences,
+                }, timeout=30)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    st.markdown("**Tóm tắt:**")
+                    st.success(data.get("summary", "Không thể tạo tóm tắt."))
+
+                    # Show score breakdown if available
+                    if "scores" in data:
+                        with st.expander("Chi tiết điểm câu"):
+                            for idx in data.get("selected_indices", []):
+                                st.markdown(f"- Câu {idx}")
+                else:
+                    st.error(f"Lỗi API: {resp.status_code}")
+            except requests.ConnectionError:
+                st.error("Không kết nối được API.")
+
+# ── Tab 4: Knowledge Graph ─────────────────────────────
+with tab4:
+    st.header("🕸️ Đồ thị kiến thức pháp luật")
+    query_type = st.selectbox("Loại truy vấn:", ["validity", "amendments", "related", "path"])
+    doc_id = st.text_input("ID văn bản:", placeholder="THONG_TU_99/2015/TT-BTC")
+    target_id = st.text_input("ID đích (cho path):", placeholder="LUAT_Ke_toan") if query_type == "path" else None
+
+    if st.button("Truy vấn", key="kg_btn") and doc_id:
+        with st.spinner("Đang truy vấn đồ thị..."):
+            try:
+                payload = {"doc_id": doc_id, "query_type": query_type}
+                if target_id:
+                    payload["target_id"] = target_id
+                resp = requests.post(f"{API_URL}/knowledge/query", json=payload, timeout=10)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    st.markdown(f"**Câu hỏi:** {data.get('question', '')}")
+                    st.markdown(f"**Trả lời:** {data.get('answer', '')}")
+                    st.caption(f"Độ tin cậy: {data.get('confidence', 0):.2f}")
+
+                    if data.get("reasoning_steps"):
+                        st.markdown("**Luận lý:**")
+                        for step in data["reasoning_steps"]:
+                            st.markdown(f"- {step}")
+
+                    if data.get("evidence"):
+                        st.markdown("**Bằng chứng:**")
+                        for ev in data["evidence"][:5]:
+                            st.json(ev)
+                else:
+                    st.error(f"Lỗi API: {resp.status_code}")
+            except requests.ConnectionError:
+                st.error("Không kết nối được API.")
+
+    # Stats
+    st.markdown("---")
+    if st.button("Thống kê đồ thị"):
+        try:
+            resp = requests.get(f"{API_URL}/knowledge/stats", timeout=5)
+            if resp.status_code == 200:
+                st.json(resp.json())
+        except Exception:
+            st.error("Không kết nối được API.")
+</file>
+
+<file path="requirements.txt">
+# Core
+python-dotenv>=1.0.0
+
+# Web
+fastapi>=0.104.0
+uvicorn>=0.24.0
+
+# ML / NLP
+torch>=2.1.0
+transformers>=4.36.0
+scikit-learn>=1.3.0
+numpy>=1.25.0
+
+# Vietnamese NLP
+py-vncorenlp>=0.1.4
+
+# Knowledge Graph
+networkx>=3.2.0
+pyvis>=0.3.2
+
+# Search (custom implementation - no external search deps needed)
+
+# Summarization evaluation
+rouge-score>=0.1.2
+
+# Data processing
+pandas>=2.1.0
+matplotlib>=3.8.0
+
+# Utils
+tqdm>=4.66.0
+</file>
+
+<file path="scripts/preprocess.py">
+"""Preprocess legal data: segment, clean, split train/val/test."""
+
+import json
+import random
+from pathlib import Path
+
+from src.common.config import (
+    QA_DATA_PATH, LEGAL_DATA_PATH, PROCESSED_DIR,
+    INTENT_LABELS, NER_LABELS,
+)
+from src.common.text_processor import (
+    clean_vietnamese, segment_text, segment_sentences,
+    extract_legal_references, build_training_labels_for_ner,
+)
+
+
+def preprocess_qa_data():
+    """Preprocess Q&A data for intent classification and NER training."""
+    print("Loading Q&A data...")
+    with open(QA_DATA_PATH, encoding="utf-8") as f:
+        data = json.load(f)
+
+    # Handle both formats: {"count": N, "sample": {...}} and [item, ...]
+    if isinstance(data, dict) and "sample" in data:
+        items = [_unwrap(data["sample"])]
+        # yuiTC format: keys are string indices "0", "1", ..., each is a QA pair
+        for key in data:
+            if isinstance(data[key], dict) and "question" in data[key]:
+                items.append(_unwrap(data[key]))
+    elif isinstance(data, list):
+        items = [_unwrap(i) for i in data]
+    else:
+        print(f"Unexpected data format: {type(data)}")
+        return
+
+    print(f"  Loaded {len(items)} Q&A pairs")
+
+    # Segment and clean
+    processed = []
+    for item in items:
+        question = clean_vietnamese(item["question"])
+        context = clean_vietnamese(item["context"])
+
+        # Extract NER labels from context
+        references = extract_legal_references(context)
+        ner_labels = build_training_labels_for_ner(context, references)
+
+        # Segment for PhoBERT
+        seg_question = segment_text(question)
+        seg_context = segment_text(context)
+
+        processed.append({
+            "question": question,
+            "context": context,
+            "segmented_question": seg_question,
+            "segmented_context": seg_context,
+            "references": references,
+            "ner_labels": ner_labels,
+            "qid": item.get("qid", ""),
+            "cid": item.get("cid", ""),
+        })
+
+    # Split train/val/test (80/10/10)
+    random.shuffle(processed)
+    n = len(processed)
+    train = processed[: int(n * 0.8)]
+    val = processed[int(n * 0.8) : int(n * 0.9)]
+    test = processed[int(n * 0.9) :]
+
+    # Save
+    for split, data_list in [("train", train), ("val", val), ("test", test)]:
+        out_path = PROCESSED_DIR / f"qa_{split}.json"
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(data_list, f, ensure_ascii=False, indent=2)
+        print(f"  Saved {split}: {len(data_list)} items → {out_path}")
+
+
+def preprocess_legal_docs():
+    """Preprocess legal document data for search index and knowledge graph."""
+    print("Loading legal document data...")
+    with open(LEGAL_DATA_PATH, encoding="utf-8") as f:
+        data = json.load(f)
+
+    if isinstance(data, list):
+        docs = data
+    elif isinstance(data, dict):
+        # Try to find the document list
+        for key in data:
+            if isinstance(data[key], list) and len(data[key]) > 0:
+                docs = data[key]
+                break
+        else:
+            print(f"  Could not find document list in data")
+            return
+    else:
+        print(f"Unexpected data format: {type(data)}")
+        return
+
+    print(f"  Loaded {len(docs)} documents")
+
+    # Process each document
+    processed = []
+    for doc in docs:
+        content = doc.get("content", doc.get("text", ""))
+        if not content:
+            continue
+
+        content = clean_vietnamese(content)
+        segmented = segment_text(content)
+        sentences = segment_sentences(content)
+        references = extract_legal_references(content)
+
+        processed.append({
+            "id": doc.get("id", ""),
+            "title": doc.get("title", ""),
+            "type": doc.get("type", doc.get("law_type", "")),
+            "content": content,
+            "segmented_content": segmented,
+            "sentences": sentences,
+            "references": references,
+            "law_number": doc.get("law_number", ""),
+            "issuer": doc.get("issuer", ""),
+            "effective_date": doc.get("effective_date", ""),
+        })
+
+    # Save processed documents
+    out_path = PROCESSED_DIR / "legal_docs.json"
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(processed, f, ensure_ascii=False, indent=2)
+    print(f"  Saved {len(processed)} documents → {out_path}")
+
+
+def _unwrap(entry: dict) -> dict:
+    """Normalize a QA entry into consistent format."""
+    return {
+        "question": entry.get("question", ""),
+        "context": entry.get("context_list", entry.get("context", "")),
+        "qid": entry.get("qid", ""),
+        "cid": entry.get("cid", ""),
+    }
+
+
+if __name__ == "__main__":
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+
+    if QA_DATA_PATH.exists():
+        preprocess_qa_data()
+    else:
+        print(f"Q&A data not found at {QA_DATA_PATH}. Run download_data.py first.")
+
+    if LEGAL_DATA_PATH.exists():
+        preprocess_legal_docs()
+    else:
+        print(f"Legal data not found at {LEGAL_DATA_PATH}. Run download_data.py first.")
+</file>
+
+<file path="src/chatbot/pipeline.py">
+"""Chatbot pipeline: intent → NER → dispatch to search/summarizer/KG → response.
+
+The central orchestrator that connects all 4 modules:
+1. Intent classification (PhoBERT Head 1)
+2. Named Entity Recognition (PhoBERT Head 2)
+3. Search (InvertedIndex + BM25 + Trie)
+4. Summarization (PhoBERT Head 3 + TextRank)
+5. Knowledge Graph reasoning (NetworkX)
+"""
+
+from dataclasses import dataclass
+from typing import Optional
+
+from src.common.config import INTENT_LABELS
+from src.chatbot.intent_classifier import PhoBERTIntentClassifier
+from src.chatbot.ner_tagger import PhoBERTNERTagger
+from src.search.search_engine import LegalSearchEngine
+from src.summarizer.summarizer import LegalSummarizer
+from src.knowledge.graph_builder import LegalKnowledgeGraph
+from src.knowledge.reasoner import LegalReasoner
+
+
+@dataclass
+class ChatResponse:
+    """Structured response from the chatbot."""
+    answer: str
+    intent: str
+    confidence: float
+    entities: list[dict]
+    sources: list[dict]
+    reasoning: list[str]
+    summary: Optional[str] = None
+
+
+class LegalChatbot:
+    """Legal Q&A chatbot orchestrating all modules.
+
+    Flow: question → intent + NER → search → summarize → KG → response
+    """
+
+    # Intent to module routing
+    INTENT_ROUTING = {
+        "hoi_dieu_khoan": ("search", "summarize"),
+        "hoi_luat_moi": ("search", "summarize"),
+        "tra_cuu_thong_tu": ("search", "summarize", "kg"),
+        "tra_cuu_nghi_dinh": ("search", "summarize", "kg"),
+        "tra_cuu_luat": ("search", "summarize", "kg"),
+        "hoi_hieu_luc": ("kg",),
+        "hoi_sua_doi": ("kg", "search"),
+        "hoi_dinh_nghia": ("search", "summarize"),
+        "hoi_thu_tuc": ("search", "summarize"),
+        "hoi_hinh_phat": ("search", "summarize", "kg"),
+        "hoi_quyen_loi": ("search", "summarize"),
+        "hoi_nghia_vu": ("search", "summarize"),
+        "hoi_bieu_phi": ("search", "summarize"),
+        "hoi_thoi_han": ("search", "kg"),
+        "hoi_doi_tuong": ("search", "summarize"),
+        "hoi_dieu_kien": ("search", "summarize"),
+        "hoi_phan_biet": ("search", "summarize"),
+        "hoi_so_sanh": ("search", "kg", "summarize"),
+        "hoi_tom_tat": ("search", "summarize"),
+        "hoi_tong_hop": ("search", "kg", "summarize"),
+    }
+
+    def __init__(
+        self,
+        intent_model_path: Optional[str] = None,
+        ner_model_path: Optional[str] = None,
+        scorer_model_path: Optional[str] = None,
+        lora_checkpoint_path: Optional[str] = None,
+        search_engine: Optional[LegalSearchEngine] = None,
+        knowledge_graph: Optional[LegalKnowledgeGraph] = None,
+    ):
+        # Load models lazily
+        self._intent_classifier = None
+        self._ner_tagger = None
+        self._summarizer = None
+        self._search_engine = search_engine
+        self._kg = knowledge_graph
+        self._reasoner = None
+
+        self._intent_model_path = intent_model_path
+        self._ner_model_path = ner_model_path
+        self._scorer_model_path = scorer_model_path
+        self._lora_checkpoint_path = lora_checkpoint_path
+        self._lora_loaded = False
+
+    def _load_lora(self):
+        """Load LoRA checkpoint for both intent and NER."""
+        if self._lora_loaded or not self._lora_checkpoint_path:
+            return
+        import torch
+        from transformers import AutoTokenizer
+
+        checkpoint = torch.load(self._lora_checkpoint_path, map_location="cpu")
+        phobert_state = {k.replace("phobert.", ""): v
+                         for k, v in checkpoint["model_state_dict"].items()
+                         if k.startswith("phobert.")}
+
+        # Intent
+        self._intent_classifier = PhoBERTIntentClassifier()
+        self._intent_tokenizer = AutoTokenizer.from_pretrained("vinai/phobert-base")
+        intent_state = {k.replace("intent_classifier.", ""): v
+                        for k, v in checkpoint["model_state_dict"].items()
+                        if k.startswith("intent_classifier.")}
+        self._intent_classifier.phobert.load_state_dict(phobert_state, strict=False)
+        self._intent_classifier.classifier.load_state_dict(intent_state, strict=False)
+        self._intent_classifier.eval()
+
+        # NER
+        self._ner_tagger = PhoBERTNERTagger()
+        self._ner_tokenizer = AutoTokenizer.from_pretrained("vinai/phobert-base")
+        ner_state = {k.replace("ner_classifier.", ""): v
+                     for k, v in checkpoint["model_state_dict"].items()
+                     if k.startswith("ner_classifier.")}
+        self._ner_tagger.phobert.load_state_dict(phobert_state, strict=False)
+        self._ner_tagger.classifier.load_state_dict(ner_state, strict=False)
+        self._ner_tagger.eval()
+
+        self._lora_loaded = True
+
+    def _load_intent(self):
+        if self._intent_classifier is None:
+            if self._lora_checkpoint_path:
+                self._load_lora()
+            else:
+                from transformers import AutoTokenizer
+                self._intent_classifier = PhoBERTIntentClassifier()
+                self._intent_tokenizer = AutoTokenizer.from_pretrained("vinai/phobert-base")
+                if self._intent_model_path:
+                    import torch
+                    state_dict = torch.load(self._intent_model_path, map_location="cpu")
+                    self._intent_classifier.load_state_dict(state_dict)
+                self._intent_classifier.eval()
+
+    def _load_ner(self):
+        if self._ner_tagger is None:
+            if self._lora_checkpoint_path:
+                self._load_lora()
+            else:
+                from transformers import AutoTokenizer
+                self._ner_tagger = PhoBERTNERTagger()
+                self._ner_tokenizer = AutoTokenizer.from_pretrained("vinai/phobert-base")
+                if self._ner_model_path:
+                    import torch
+                    state_dict = torch.load(self._ner_model_path, map_location="cpu")
+                    self._ner_tagger.load_state_dict(state_dict)
+                self._ner_tagger.eval()
+
+    def _load_summarizer(self):
+        if self._summarizer is None:
+            self._summarizer = LegalSummarizer(model_path=self._scorer_model_path)
+
+    def _load_reasoner(self):
+        if self._reasoner is None and self._kg is not None:
+            self._reasoner = LegalReasoner(self._kg)
+
+    def ask(self, question: str, top_k_docs: int = 5, top_k_sentences: int = 4) -> ChatResponse:
+        """Process a legal question through the full pipeline.
+
+        Args:
+            question: Vietnamese legal question
+            top_k_docs: Number of documents to retrieve from search
+            top_k_sentences: Number of sentences for summary
+
+        Returns:
+            ChatResponse with answer, sources, reasoning
+        """
+        # Step 1: Intent classification
+        self._load_intent()
+        intent_result = self._intent_classifier.predict(question, self._intent_tokenizer)
+        intent = intent_result["intent"]
+        confidence = intent_result["confidence"]
+
+        # Step 2: Named Entity Recognition
+        self._load_ner()
+        entities = self._ner_tagger.predict(question, self._ner_tokenizer)
+
+        # Step 3: Route to modules based on intent
+        modules = self.INTENT_ROUTING.get(intent, ("search", "summarize"))
+        sources = []
+        reasoning = []
+        summary = None
+
+        # Step 3a: Search (if needed)
+        if "search" in modules and self._search_engine is not None:
+            search_results = self._search_engine.search(question, top_k=top_k_docs)
+            sources = search_results
+
+        # Step 3b: Summarize (if needed and search results exist)
+        if "summarize" in modules and sources:
+            self._load_summarizer()
+            # Use top search result as document for summarization
+            top_doc = sources[0] if sources else None
+            if top_doc and "content" in top_doc:
+                summary_result = self._summarizer.summarize(
+                    document=top_doc["content"],
+                    query=question,
+                    top_k=top_k_sentences,
+                )
+                summary = summary_result["summary"]
+                reasoning.append(f"Tóm tắt từ {top_doc.get('title', 'văn bản')}")
+
+        # Step 3c: Knowledge Graph (if needed)
+        if "kg" in modules and self._reasoner is not None:
+            # Extract document IDs from entities
+            for entity in entities:
+                if entity["entity"] in ("THONG_TU", "NGHI_DINH", "LUAT"):
+                    doc_id = f"{entity['entity']}_{entity['text'].replace(' ', '_')}"
+                    kg_result = self._reasoner.check_validity(doc_id)
+                    reasoning.extend(kg_result.reasoning_steps)
+
+        # Step 4: Build response
+        answer = self._build_answer(intent, entities, sources, summary, reasoning)
+
+        return ChatResponse(
+            answer=answer,
+            intent=intent,
+            confidence=confidence,
+            entities=entities,
+            sources=sources,
+            reasoning=reasoning,
+            summary=summary,
+        )
+
+    def _build_answer(self, intent, entities, sources, summary, reasoning):
+        """Build a natural language answer from module outputs."""
+        parts = []
+
+        if summary:
+            parts.append(summary)
+
+        if reasoning:
+            parts.append("\n".join(reasoning))
+
+        if sources:
+            source_texts = [f"- {s.get('title', s.get('doc_id', 'N/A'))}" for s in sources[:3]]
+            parts.append("Nguồn tham khảo:\n" + "\n".join(source_texts))
+
+        if not parts:
+            parts.append("Xin lỗi, tôi không tìm thấy thông tin liên quan. Vui lòng thử lại với câu hỏi cụ thể hơn.")
+
+        return "\n\n".join(parts)
+</file>
+
+<file path="src/common/text_processor.py">
+"""Text preprocessing for Vietnamese legal text.
+
+CRITICAL: Vietnamese text MUST be word-segmented with VnCoreNLP/RDRSegmenter
+before PhoBERT tokenization. This module provides the segmentation pipeline.
+"""
+
+import re
+from pathlib import Path
+
+# VnCoreNLP will be loaded lazily to avoid startup cost
+_segmenter = None
+
+
+def get_segmenter(save_dir: str = "./vncorenlp"):
+    """Load word segmenter for Vietnamese text.
+
+    Tries VnCoreNLP first, falls back to underthesea if Java unavailable.
+    """
+    global _segmenter
+    if _segmenter is not None:
+        return _segmenter
+
+    # Try VnCoreNLP first
+    try:
+        import py_vncorenlp
+        model_dir = Path(save_dir)
+        model_dir.mkdir(parents=True, exist_ok=True)
+        if not (model_dir / "RDRSEG").exists():
+            py_vncorenlp.download_model(save_dir=save_dir)
+        _segmenter = py_vncorenlp.VnCoreNLP(
+            annotators=["wseg"], save_dir=save_dir
+        )
+        return _segmenter
+    except Exception:
+        pass  # Fall through to underthesea
+
+    # Fallback: underthesea (pure Python, no Java)
+    try:
+        from underthesea import word_tokenize
+        _segmenter = word_tokenize
+        return _segmenter
+    except ImportError:
+        raise ImportError(
+            "No Vietnamese segmenter available. Run: pip install underthesea"
+        )
+
+
+def segment_text(text: str, save_dir: str = "./vncorenlp") -> str:
+    """Segment Vietnamese text for PhoBERT input.
+
+    Converts "Thông tư 99 quy định chế độ kế toán"
+    → "Thông_tư 99 quy_định chế_độ kế_toán"
+
+    Returns a single string with underscore-joined compound words.
+    """
+    segmenter = get_segmenter(save_dir)
+    # VnCoreNLP returns list of sentences; underthesea returns list of tokens
+    if callable(segmenter) and not hasattr(segmenter, 'word_segment'):
+        # underthesea fallback: list of tokens
+        tokens = segmenter(text)
+        return " ".join(tokens)
+    sentences = segmenter.word_segment(text)
+    return " ".join(sentences)
+
+
+def segment_texts(texts: list[str], save_dir: str = "./vncorenlp") -> list[str]:
+    """Batch segment multiple texts."""
+    return [segment_text(t, save_dir) for t in texts]
+
+
+def clean_vietnamese(text: str) -> str:
+    """Clean Vietnamese legal text."""
+    text = re.sub(r"\s+", " ", text)
+    text = text.replace("\u200b", "").replace("\ufeff", "")
+    # Remove excessive punctuation
+    text = re.sub(r"([.!?])\1{3,}", r"\1", text)
+    return text.strip()
+
+
+def segment_sentences(text: str) -> list[str]:
+    """Split Vietnamese text into sentences.
+
+    Uses regex on common Vietnamese sentence boundaries.
+    More robust than simple period-split for legal text.
+    """
+    # Split on period/newline followed by uppercase or number
+    parts = re.split(r"(?<=[.!?])\s+(?=[A-ZÀ-Ỹ0-9])", text)
+    # Also split on newlines that look like sentence boundaries
+    sentences = []
+    for part in parts:
+        sub = re.split(r"\n+", part.strip())
+        for s in sub:
+            s = s.strip()
+            if len(s) > 10:  # skip very short fragments
+                sentences.append(s)
+    return sentences
+
+
+def extract_legal_references(text: str) -> list[dict]:
+    """Extract legal document references from text.
+
+    Returns list of dicts: [{"type": "THONG_TU", "number": "99/2015", "full": "Thông tư 99/2015/TT-BTC"}, ...]
+    """
+    patterns = {
+        "THONG_TU": r"Thông\s+tư\s+(?:số\s+)?([\d/]+(?:/TT-\w+)?)",
+        "NGHI_DINH": r"Nghị\s+định\s+(?:số\s+)?([\d/]+(?:/NĐ-CP)?)",
+        "LUAT": r"Luật\s+([\w\s]+?)(?:\s+số\s+|năm|\d{4}|$)",
+        "DIEU": r"Điều\s+(\d+)",
+        "KHOAN": r"Khoản\s+(\d+)",
+        "DIEM": r"Điểm\s+([a-zđ]+)",
+    }
+
+    results = []
+    for ref_type, pattern in patterns.items():
+        for match in re.finditer(pattern, text, re.IGNORECASE):
+            results.append({
+                "type": ref_type,
+                "value": match.group(1).strip() if match.lastindex else match.group(0),
+                "full": match.group(0),
+                "start": match.start(),
+                "end": match.end(),
+            })
+
+    # Sort by position in text
+    results.sort(key=lambda x: x["start"])
+    return results
+
+
+def build_training_labels_for_ner(text: str, references: list[dict], tokenizer=None) -> list[str]:
+    """Build BIO tags for NER training from extracted references.
+
+    Given text and extracted legal references, produce a list of BIO tags
+    aligned with tokenized text.
+
+    Args:
+        text: Original Vietnamese text
+        references: Output of extract_legal_references()
+        tokenizer: PhoBERT tokenizer (optional, for subword alignment)
+
+    Returns:
+        List of BIO tags (strings), one per token
+    """
+    # Tokenize by whitespace (will be further tokenized by PhoBERT)
+    tokens = text.split()
+    labels = ["O"] * len(tokens)
+
+    # Build character-to-token mapping
+    char_to_token = {}
+    pos = 0
+    for i, token in enumerate(tokens):
+        for j in range(len(token)):
+            char_to_token[pos + j] = i
+        char_to_token[pos + len(token)] = i  # space position
+        pos += len(token) + 1  # +1 for space
+
+    # Assign BIO tags based on reference positions
+    for ref in references:
+        ref_type = ref["type"]
+        start_char = ref["start"]
+        end_char = ref["end"]
+
+        # Find token indices
+        start_token = char_to_token.get(start_char)
+        end_token = None
+        for c in range(end_char - 1, start_char, -1):
+            if c in char_to_token:
+                end_token = char_to_token[c]
+                break
+
+        if start_token is not None and end_token is not None:
+            labels[start_token] = f"B-{ref_type}"
+            for t in range(start_token + 1, end_token + 1):
+                if labels[t] == "O":
+                    labels[t] = f"I-{ref_type}"
+
+    return labels
+</file>
+
+<file path="src/app.py">
+"""FastAPI backend wiring all 4 LegalAI modules."""
+
+import json
+from pathlib import Path
+from typing import Optional
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+from src.common.config import (
+    SEARCH_INDEX_PATH, KG_PATH,
+    INTENT_MODEL_DIR, NER_MODEL_DIR, SCORER_MODEL_DIR,
+)
+
+# LoRA checkpoint for Luật Kế toán 2025
+LORA_CHECKPOINT_PATH = "data/models/lora_ke_toan/best_model.pt"
+from src.search.search_engine import LegalSearchEngine
+from src.knowledge.graph_builder import LegalKnowledgeGraph
+from src.knowledge.reasoner import LegalReasoner
+from src.knowledge.visualizer import visualize_graph, visualize_amendment_chain
+
+
+app = FastAPI(title="LegalAI Platform", version="0.1.0")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+# ── Global state (loaded on startup) ──────────────────
+search_engine: Optional[LegalSearchEngine] = None
+kg: Optional[LegalKnowledgeGraph] = None
+reasoner: Optional[LegalReasoner] = None
+
+
+@app.on_event("startup")
+async def startup():
+    """Load models and indices on startup."""
+    global search_engine, kg, reasoner
+
+    # Load search index
+    if Path(SEARCH_INDEX_PATH).exists():
+        search_engine = LegalSearchEngine()
+        search_engine.index.load(str(SEARCH_INDEX_PATH))
+        search_engine.build()
+        print(f"Search index loaded: {search_engine.index.doc_count} docs")
+
+    # Load knowledge graph
+    if Path(KG_PATH).exists():
+        kg = LegalKnowledgeGraph()
+        kg.load(str(KG_PATH))
+        reasoner = LegalReasoner(kg)
+        print(f"Knowledge graph loaded: {kg.node_count} nodes, {kg.edge_count} edges")
+
+
+# ── Request models ─────────────────────────────────────
+class QueryRequest(BaseModel):
+    question: str
+    top_k: int = 10
+
+class SearchRequest(BaseModel):
+    query: str
+    top_k: int = 10
+
+class SummarizeRequest(BaseModel):
+    document: str
+    query: str = ""
+    top_k: int = 4
+
+class KGQueryRequest(BaseModel):
+    doc_id: str
+    query_type: str = "validity"  # validity | amendments | related | path
+    target_id: Optional[str] = None
+
+
+# ── Endpoints ──────────────────────────────────────────
+@app.get("/")
+def root():
+    return {
+        "name": "LegalAI Platform",
+        "modules": ["chatbot", "search", "summarizer", "knowledge"],
+        "search_loaded": search_engine is not None,
+        "kg_loaded": kg is not None,
+    }
+
+
+@app.post("/search")
+def search(req: SearchRequest):
+    """Search for legal documents."""
+    if search_engine is None:
+        return {"error": "Search engine not loaded. Run build_index.py first."}
+    results = search_engine.search(req.query, top_k=req.top_k)
+    # Remove non-serializable model objects
+    for r in results:
+        r.pop("model", None)
+    return {"query": req.query, "results": results}
+
+
+@app.post("/search/autocomplete")
+def autocomplete(prefix: str, max_results: int = 10):
+    """Get autocomplete suggestions."""
+    if search_engine is None:
+        return {"error": "Search engine not loaded."}
+    return {"suggestions": search_engine.autocomplete(prefix, max_results)}
+
+
+@app.post("/search/explain")
+def explain(query: str, doc_id: int):
+    """Explain BM25 scoring for a document."""
+    if search_engine is None:
+        return {"error": "Search engine not loaded."}
+    return search_engine.explain(query, doc_id)
+
+
+@app.post("/summarize")
+def summarize(req: SummarizeRequest):
+    """Summarize a legal document."""
+    from src.summarizer.summarizer import LegalSummarizer
+    summarizer = LegalSummarizer()
+    result = summarizer.summarize(
+        document=req.document,
+        query=req.query,
+        top_k=req.top_k,
+        use_model=False,  # Use TF-IDF fallback until model is trained
+    )
+    return {"summary": result["summary"], "selected_indices": result["selected_indices"]}
+
+
+@app.post("/knowledge/query")
+def knowledge_query(req: KGQueryRequest):
+    """Query the legal knowledge graph."""
+    if reasoner is None:
+        return {"error": "Knowledge graph not loaded. Run build_graph.py first."}
+
+    if req.query_type == "validity":
+        result = reasoner.check_validity(req.doc_id)
+    elif req.query_type == "amendments":
+        result = reasoner.trace_amendments(req.doc_id)
+    elif req.query_type == "related":
+        result = reasoner.find_related(req.doc_id)
+    elif req.query_type == "path" and req.target_id:
+        result = reasoner.find_reasoning_path(req.doc_id, req.target_id)
+    else:
+        return {"error": f"Unknown query_type: {req.query_type}"}
+
+    return {
+        "question": result.question,
+        "answer": result.answer,
+        "confidence": result.confidence,
+        "reasoning_steps": result.reasoning_steps,
+        "evidence": result.evidence,
+    }
+
+
+@app.post("/knowledge/stats")
+def knowledge_stats():
+    """Get knowledge graph statistics."""
+    if kg is None:
+        return {"error": "Knowledge graph not loaded."}
+    return kg.get_stats()
+
+
+@app.post("/knowledge/visualize")
+def knowledge_visualize(doc_id: Optional[str] = None, max_nodes: int = 100):
+    """Generate interactive visualization of the knowledge graph."""
+    if kg is None:
+        return {"error": "Knowledge graph not loaded."}
+    output = visualize_graph(kg, output_path="legal_kg.html", max_nodes=max_nodes, focus_node=doc_id)
+    return {"visualization": output}
+
+
+@app.post("/chat")
+def chat(req: QueryRequest):
+    """Full chatbot pipeline: intent → NER → search → summarize → KG → response."""
+    from src.chatbot.pipeline import LegalChatbot
+
+    lora_path = LORA_CHECKPOINT_PATH if Path(LORA_CHECKPOINT_PATH).exists() else None
+    chatbot = LegalChatbot(
+        search_engine=search_engine,
+        knowledge_graph=kg,
+        lora_checkpoint_path=lora_path,
+    )
+    response = chatbot.ask(req.question, top_k_docs=req.top_k)
+
+    return {
+        "answer": response.answer,
+        "intent": response.intent,
+        "confidence": response.confidence,
+        "entities": response.entities,
+        "sources": response.sources,
+        "summary": response.summary,
+        "reasoning": response.reasoning,
+    }
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("src.app:app", host="0.0.0.0", port=8000, reload=True)
+</file>
+
+</files>

@@ -24,8 +24,8 @@
 ### Facade Pattern
 Each module exposes a single entry-point class:
 - `LegalSearchEngine` wraps `InvertedIndex`, `BM25`, `Trie`
-- `LegalSummarizer` wraps `PhoBERTSentenceScorer`, `TextRank`
-- `LegalChatbot` wraps `IntentClassifier`, `NERTagger`, routes to other modules
+- `LegalSummarizer` wraps `PhoBERTSentenceScorer`, `textrank` functions (from `src.summarizer.textrank`)
+- `LegalChatbot` wraps `PhoBERTIntentClassifier`, `PhoBERTNERTagger`, routes to other modules
 - `LegalKnowledgeGraph` wraps `LegalEntityExtractor`, `LegalRelationExtractor`
 
 ### Lazy Loading
@@ -39,9 +39,9 @@ def _load_intent(self):
 
 ### Fallback Strategy
 PhoBERT components degrade gracefully:
-- Intent classifier: random weights if not trained (still runs, poor accuracy)
+- Intent classifier: LoRA checkpoint loads if available; otherwise random weights (still runs, poor accuracy)
 - Summarizer: `use_model=False` flag triggers TF-IDF cosine similarity fallback
-- NER: untrained predictions produce noisy output
+- NER: untrained predictions produce noisy output unless LoRA checkpoint is loaded
 
 ## Coding Conventions
 
@@ -80,10 +80,13 @@ All constants in one place:
 - **Always** segment text with VnCoreNLP before PhoBERT tokenization
 - Use `src/common/text_processor.py: segment_text()` for word segmentation
 - Vietnamese diacritics preserved in tokenization regex
-- Legal reference extraction uses Vietnamese-specific patterns (Thong tu, Nghj dinh, Dieu, etc.)
+- Legal reference extraction uses Vietnamese-specific patterns (Thong tu, Nghi dinh, Dieu, etc.)
 
-## Testing Standards (Planned)
+## Testing Standards
 
+**Current state**: Zero tests. `tests/` directory is empty.
+
+**Planned**:
 - **Framework**: pytest
 - **Structure**: `tests/test_{module}_{component}.py`
 - **Coverage target**: >80% for search, summarizer, knowledge modules
@@ -100,3 +103,8 @@ Core dependencies in `requirements.txt`:
 - `py-vncorenlp>=0.1.4` for word segmentation
 - `fastapi>=0.104` + `uvicorn>=0.24` for API
 - No external search library — all custom implementations
+
+**Missing dependency**: `peft` is required by `train_lora_phobert.py` but not listed in `requirements.txt`. Install manually:
+```bash
+pip install peft
+```

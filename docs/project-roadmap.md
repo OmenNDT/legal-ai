@@ -16,6 +16,12 @@
 - Unit tests for search module passing
 - Intent classifier training script runs (even with poor accuracy)
 
+**Week 1 Actual Status**: COMPLETE
+- Data pipeline (download, preprocess, build_index, build_graph) functional
+- LoRA training script (`train_lora_phobert.py`) written and runnable
+- Search module implemented (no tests yet)
+- FastAPI + Streamlit integration working
+
 ---
 
 ### Week 2: Model Training & Evaluation
@@ -32,6 +38,12 @@
 - Sentence scorer: ROUGE-L >0.3
 - BM25: MRR@10 >0.5 on QA pairs
 - All API endpoints return valid responses
+
+**Week 2 Actual Status**: IN PROGRESS
+- LoRA checkpoint (`data/models/lora_ke_toan/best_model.pt`) EXISTS — training has been run
+- PhoBERT sentence scorer still untrained (TF-IDF fallback active in API)
+- Zero tests written
+- No evaluation notebooks
 
 ---
 
@@ -71,8 +83,8 @@
 
 | Phase | Status | Start | End |
 |-------|--------|-------|-----|
-| Week 1: Foundation | In Progress | Week 1 | Week 1 |
-| Week 2: Training | Not Started | Week 2 | Week 2 |
+| Week 1: Foundation | Complete | Week 1 | Week 1 |
+| Week 2: Training | In Progress | Week 2 | Week 2 |
 | Week 3: Integration | Not Started | Week 3 | Week 3 |
 | Week 4: Polish | Not Started | Week 4 | Week 4 |
 
@@ -85,6 +97,8 @@
 | VnCoreNLP segmentation errors | Affects all PhoBERT inputs | Add segmentation validation step |
 | Knowledge graph sparse coverage | Low reasoning quality | Augment with QA-derived entities |
 | Large document summarization OOM | API failures | Truncate documents to MAX_SEQ_LENGTH |
+| PEFT missing from requirements.txt | Training script fails on fresh install | Add `peft>=0.7.0` to requirements.txt |
+| Zero test coverage | Undetected regressions | Prioritize search module unit tests in Week 2/4 |
 
 ## Deliverables Summary
 
@@ -94,4 +108,5 @@
 4. **Knowledge Graph**: NetworkX graph with 20K+ nodes, reasoning queries, Pyvis visualization
 5. **API**: FastAPI with all endpoints, error handling, integration tests
 6. **UI**: Streamlit with 4 tabs, formatted results, API health check
-7. **Documentation**: Architecture docs, deployment guide, code standards
+7. **LoRA Pipeline**: parse -> generate QA v2 -> train -> inference scripts
+8. **Documentation**: Architecture docs, deployment guide, code standards

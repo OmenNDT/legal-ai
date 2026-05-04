@@ -132,6 +132,10 @@ def build_question_templates():
             "Điều {id} quy định thời điểm có hiệu lực của {title}?",
             "Từ khi nào {title} có hiệu lực theo Luật Kế toán?",
             "Thời gian bắt đầu hiệu lực của {title} tại Điều {id}?",
+            "Khi nào {title} bắt đầu có hiệu lực theo Luật Kế toán?",
+            "Thời điểm áp dụng của {title} được quy định tại Điều {id}?",
+            "Điều {id} nêu rõ {title} có hiệu lực từ thời điểm nào?",
+            "{title} có hiệu lực kể từ ngày nào theo Luật Kế toán?",
         ],
         "hoi_hinh_phat": [
             "Hình phạt/Chế tài vi phạm {title} được quy định tại Điều {id}?",
@@ -141,6 +145,10 @@ def build_question_templates():
             "Chế tài xử lý vi phạm {title} theo Điều {id}?",
             "Mức phạt cho hành vi vi phạm {title} tại Điều {id}?",
             "Trách nhiệm pháp lý về {title} được quy định tại Điều {id}?",
+            "Vi phạm {title} bị xử lý như thế nào theo Điều {id}?",
+            "Chế tài đối với hành vi vi phạm {title} tại Điều {id} là gì?",
+            "Điều {id} quy định hình thức xử phạt nào đối với {title}?",
+            "Mức độ xử lý vi phạm {title} theo Luật Kế toán tại Điều {id}?",
         ],
         "hoi_sua_doi": [
             "Điều {id} có quy định sửa đổi, bổ sung gì về {title}?",
@@ -153,30 +161,48 @@ def build_question_templates():
     }
 
 
-def detect_intent(title: str, content: str = "") -> str:
-    """Detect intent from article title and content using keyword matching."""
-    text = (title + " " + content).lower()
+def detect_intent_matches(text: str) -> set[str]:
+    """Return all intent names that match the given text."""
+    text_lower = text.lower()
+    matched = set()
 
-    # Priority order: specific → general
-    if any(k in text for k in ["giải thích từ ngữ", "định nghĩa", "khái niệm", "hiểu là", "được hiểu là"]):
-        return "hoi_dinh_nghia"
-    if any(k in text for k in ["đối tượng áp dụng", "phạm vi điều chỉnh", "áp dụng cho"]):
-        return "hoi_doi_tuong"
-    if any(k in text for k in ["quyền", "được quyền", "quyền lợi", "được hưởng", "được phép", "benefit"]):
-        return "hoi_quyen_loi"
-    if any(k in text for k in ["nghĩa vụ", "trách nhiệm", "bắt buộc phải", "phải có", "phải thực hiện", "nộp", "báo cáo"]):
-        return "hoi_nghia_vu"
-    if any(k in text for k in ["thủ tục", "trình tự", "quy trình", "các bước", "thực hiện", "hồ sơ", "chứng từ", "procedure"]):
-        return "hoi_thu_tuc"
-    if any(k in text for k in ["thời hạn", "thời hiệu", "kỳ hạn", "thời gian", "thời điểm", "deadline", "hiệu lực"]):
-        return "hoi_thoi_han"
-    if any(k in text for k in ["sửa đổi", "bổ sung", "thay thế", "điều chỉnh", "bãi bỏ"]):
-        return "hoi_sua_doi"
-    if any(k in text for k in ["vi phạm", "xử phạt", "chế tài", "trách nhiệm pháp lý", "hình phạt", "cấm", "xử lý"]):
-        return "hoi_hinh_phat"
-    if any(k in text for k in ["hiệu lực", "có hiệu lực", "thi hành", "áp dụng từ"]):
-        return "hoi_hieu_luc"
-    return "hoi_dieu_khoan"
+    if any(k in text_lower for k in ["giải thích từ ngữ", "định nghĩa", "khái niệm", "hiểu là", "được hiểu là"]):
+        matched.add("hoi_dinh_nghia")
+    if any(k in text_lower for k in ["đối tượng áp dụng", "phạm vi điều chỉnh", "áp dụng cho"]):
+        matched.add("hoi_doi_tuong")
+    if any(k in text_lower for k in ["quyền", "được quyền", "quyền lợi", "được hưởng", "được phép", "benefit"]):
+        matched.add("hoi_quyen_loi")
+    if any(k in text_lower for k in ["nghĩa vụ", "trách nhiệm", "bắt buộc phải", "phải có", "phải thực hiện", "nộp", "báo cáo"]):
+        matched.add("hoi_nghia_vu")
+    if any(k in text_lower for k in ["thủ tục", "trình tự", "quy trình", "các bước", "hồ sơ", "chứng từ", "procedure"]):
+        matched.add("hoi_thu_tuc")
+    if any(k in text_lower for k in ["thời hạn", "thời hiệu", "kỳ hạn", "thời gian", "thời điểm", "deadline", "hiệu lực"]):
+        matched.add("hoi_thoi_han")
+    if any(k in text_lower for k in ["sửa đổi", "bổ sung", "thay thế", "điều chỉnh", "bãi bỏ"]):
+        matched.add("hoi_sua_doi")
+    if any(k in text_lower for k in ["vi phạm", "xử phạt", "chế tài", "trách nhiệm pháp lý", "hình phạt", "cấm", "xử lý"]):
+        matched.add("hoi_hinh_phat")
+    if any(k in text_lower for k in ["hiệu lực", "có hiệu lực", "thi hành", "áp dụng từ"]):
+        matched.add("hoi_hieu_luc")
+
+    return matched
+
+
+def detect_all_intents(title: str, content: str) -> list[str]:
+    """Detect all applicable intents for an article.
+
+    Priority: title matches first (more reliable). If title yields nothing,
+    fall back to content matches. If still nothing, default to hoi_dieu_khoan.
+    """
+    title_matches = detect_intent_matches(title)
+    if title_matches:
+        return sorted(title_matches)
+
+    content_matches = detect_intent_matches(content)
+    if content_matches:
+        return sorted(content_matches)
+
+    return ["hoi_dieu_khoan"]
 
 
 def synonym_replace(text: str) -> str:
@@ -197,22 +223,52 @@ def synonym_replace(text: str) -> str:
     return text
 
 
-def generate_questions(dieu_id: str, title: str, content: str, templates: dict, max_per_article: int = 12) -> list[dict]:
-    """Generate question variants for an article."""
-    intent = detect_intent(title, content)
-    template_list = templates.get(intent, templates["hoi_dieu_khoan"])
+def generate_questions(
+    dieu_id: str,
+    title: str,
+    content: str,
+    templates: dict,
+    max_per_article: int = 12,
+    max_per_intent: int = 6,
+) -> list[dict]:
+    """Generate balanced question variants for an article across multiple intents.
 
-    # Use all templates + synonym variants
+    - Detects ALL applicable intents (title-priority, content fallback).
+    - Distributes the max_per_article budget evenly across matched intents.
+    - Adds one synonym variant per base question.
+    """
+    intents = detect_all_intents(title, content)
+
+    # Distribute budget: at least 2 per intent, at most max_per_intent
+    quota = max(2, max_per_article // max(len(intents), 1))
+    quota = min(quota, max_per_intent)
+
     questions = []
-    for t in template_list:
-        q = t.format(id=dieu_id, title=title.lower())
-        questions.append({"question": q, "intent": intent})
-        # Add synonym variant
-        q2 = synonym_replace(q)
-        if q2 != q:
-            questions.append({"question": q2, "intent": intent})
+    for intent in intents:
+        template_list = templates.get(intent, templates["hoi_dieu_khoan"])
 
-    # Limit to max_per_article, but ensure at least min(5, len(questions))
+        # Build base questions from templates (unique only)
+        base_questions = []
+        for t in template_list:
+            q = t.format(id=dieu_id, title=title.lower())
+            base_questions.append(q)
+
+        # Add one synonym variant per base question
+        variant_questions = []
+        for q in base_questions:
+            variant_questions.append(q)
+            q2 = synonym_replace(q)
+            if q2 != q:
+                variant_questions.append(q2)
+
+        # Shuffle and cap per-intent quota
+        random.shuffle(variant_questions)
+        selected = variant_questions[:quota]
+
+        for q in selected:
+            questions.append({"question": q, "intent": intent})
+
+    # Final cap at max_per_article
     if len(questions) > max_per_article:
         questions = random.sample(questions, max_per_article)
 
@@ -302,7 +358,7 @@ def generate_dataset(structured_path: Path, output_path: Path, max_pairs: Option
             entities = extract_entities(answer_text)
             ner_labels = build_ner_labels(answer_text, entities)
 
-            questions = generate_questions(dieu_id, title, answer_text, templates)
+            questions = generate_questions(dieu_id, title, answer_text, templates, max_per_article=18, max_per_intent=8)
             for q in questions:
                 dataset.append({
                     "id": qa_id,
