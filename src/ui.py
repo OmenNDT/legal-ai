@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import streamlit as st
 import requests
 
-API_URL = "http://localhost:8000"
+API_URL = "http://localhost:9000"
 
 st.set_page_config(page_title="LegalAI", page_icon="⚖️", layout="wide")
 st.title("⚖️ LegalAI — Trợ lý Pháp luật Thông minh")
@@ -68,7 +68,7 @@ with tab1:
                 else:
                     st.error(f"Lỗi API: {resp.status_code}")
             except requests.ConnectionError:
-                st.error("Không kết nối được API. Chạy: `python -m uvicorn src.app:app --port 8000`")
+                st.error("Không kết nối được API. Chạy: `python -m uvicorn src.app:app --port 9000`")
 
 # ── Tab 2: Search ─────────────────────────────────────
 with tab2:

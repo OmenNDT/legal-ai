@@ -20,6 +20,15 @@ from src.knowledge.graph_builder import LegalKnowledgeGraph
 from src.knowledge.reasoner import LegalReasoner
 from src.knowledge.visualizer import visualize_graph, visualize_amendment_chain
 
+# RAG Pipeline (Phần 2-3-4)
+from src.rag_pipeline import (
+    RAGPipeline,
+    RAGPipelineRequest,
+    RAGPipelineResponse,
+    MockPreprocessor,
+    MockPostprocessor,
+)
+
 
 app = FastAPI(title="LegalAI Platform", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -28,12 +37,13 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 search_engine: Optional[LegalSearchEngine] = None
 kg: Optional[LegalKnowledgeGraph] = None
 reasoner: Optional[LegalReasoner] = None
+rag_pipeline: Optional[RAGPipeline] = None
 
 
 @app.on_event("startup")
 async def startup():
     """Load models and indices on startup."""
-    global search_engine, kg, reasoner
+    global search_engine, kg, reasoner, rag_pipeline
 
     # Load search index
     if Path(SEARCH_INDEX_PATH).exists():
@@ -48,6 +58,13 @@ async def startup():
         kg.load(str(KG_PATH))
         reasoner = LegalReasoner(kg)
         print(f"Knowledge graph loaded: {kg.node_count} nodes, {kg.edge_count} edges")
+
+    # Initialize RAG Pipeline (Phần 2-3-4)
+    rag_pipeline = RAGPipeline(
+        search_engine=search_engine,
+        reasoner=reasoner,
+    )
+    print("RAG Pipeline initialized (Phần 2-3-4)")
 
 
 # ── Request models ─────────────────────────────────────
@@ -190,11 +207,185 @@ def chat(req: QueryRequest):
     }
 
 
+# ── RAG Pipeline Endpoints (Phần 2-3-4) ─────────────────
+
+@app.post("/rag/retrieve")
+def rag_retrieve(req: QueryRequest):
+    """Phần 2: Truy hồi tài liệu liên quan.
+
+    Input: câu hỏi thô
+    Output: danh sách tài liệu được xếp hạng
+    """
+    if rag_pipeline is None:
+        return {"error": "RAG Pipeline not initialized."}
+
+    # Debug: check if search_engine is available
+    if rag_pipeline.retriever.search_engine is None:
+        return {"error": "Search engine not available in retriever"}
+
+    from src.rag_pipeline import MockPreprocessor
+    preprocessor = MockPreprocessor()
+    processed = preprocessor.process(req.question)
+
+    # Debug info
+    debug_info = {
+        "question": req.question,
+        "segmented": processed.segmented_text,
+        "intent": processed.intent,
+        "filters": processed.filters,
+        "search_engine_doc_count": rag_pipeline.retriever.search_engine.index.doc_count if rag_pipeline.retriever.search_engine else 0,
+    }
+
+    result = rag_pipeline.retriever.retrieve(
+        question=processed,
+        top_k=req.top_k,
+        filters=processed.filters,
+    )
+
+    return {
+        "query": result.query,
+        "debug": debug_info,
+        "documents": [
+            {
+                "doc_id": d.doc_id,
+                "content": d.content[:300] + "..." if len(d.content) > 300 else d.content,
+                "metadata": d.metadata,
+                "score": d.score,
+                "rank": d.rank,
+            }
+            for d in result.documents
+        ],
+        "total_found": result.total_found,
+        "method": result.retrieval_method,
+        "latency_ms": result.latency_ms,
+    }
+
+
+@app.post("/rag/augment")
+def rag_augment(req: QueryRequest):
+    """Phần 3: Bổ sung ngữ cảnh từ retrieval results.
+
+    Input: câu hỏi thô
+    Output: augmented context đã rerank
+    """
+    if rag_pipeline is None:
+        return {"error": "RAG Pipeline not initialized."}
+
+    from src.rag_pipeline import MockPreprocessor
+    preprocessor = MockPreprocessor()
+    processed = preprocessor.process(req.question)
+
+    retrieval_result = rag_pipeline.retriever.retrieve(
+        question=processed,
+        top_k=req.top_k,
+        filters=processed.filters,
+    )
+
+    if reasoner is not None:
+        augmented = rag_pipeline.augmenter.augment_with_kg(
+            question=req.question,
+            retrieval_result=retrieval_result,
+            reasoner=reasoner,
+            top_k=5,
+        )
+    else:
+        augmented = rag_pipeline.augmenter.augment(
+            question=req.question,
+            retrieval_result=retrieval_result,
+            top_k=5,
+        )
+
+    return {
+        "original_question": augmented.original_question,
+        "context_text": augmented.context_text,
+        "documents_used": len(augmented.documents),
+        "token_count": augmented.token_count,
+        "strategy": augmented.context_strategy,
+        "rerank_scores": augmented.rerank_scores,
+    }
+
+
+@app.post("/rag/generate")
+def rag_generate(req: QueryRequest):
+    """Phần 4: Sinh câu trả lời từ augmented context.
+
+    Input: câu hỏi thô
+    Output: câu trả lời với citations
+    """
+    if rag_pipeline is None:
+        return {"error": "RAG Pipeline not initialized."}
+
+    request = RAGPipelineRequest(
+        question=req.question,
+        top_k_retrieval=req.top_k,
+        top_k_rerank=5,
+    )
+    response = rag_pipeline.run(request)
+
+    return {
+        "answer": response.answer,
+        "confidence": response.confidence,
+        "sources": [
+            {
+                "doc_id": s.doc_id,
+                "name": s.doc_name,
+                "excerpt": s.excerpt[:200] + "..." if len(s.excerpt) > 200 else s.excerpt,
+                "relevance": s.relevance_score,
+            }
+            for s in response.sources
+        ],
+        "reasoning": response.reasoning,
+        "latency_ms": response.latency_ms,
+    }
+
+
+@app.post("/rag/pipeline")
+def rag_pipeline_endpoint(req: RAGPipelineRequest):
+    """Full RAG Pipeline (Phần 2→3→4): từ câu hỏi đến câu trả lời.
+
+    Đây là endpoint chính cho phần của bạn.
+    Input: câu hỏi + config
+    Output: câu trả lời đầy đủ với sources và reasoning
+    """
+    if rag_pipeline is None:
+        return {"error": "RAG Pipeline not initialized. Run build_index.py first."}
+
+    response = rag_pipeline.run(req)
+
+    return {
+        "answer": response.answer,
+        "confidence": response.confidence,
+        "sources": [
+            {
+                "doc_id": s.doc_id,
+                "name": s.doc_name,
+                "excerpt": s.excerpt[:200] + "..." if len(s.excerpt) > 200 else s.excerpt,
+                "relevance": s.relevance_score,
+            }
+            for s in response.sources
+        ],
+        "reasoning": response.reasoning,
+        "retrieval": {
+            "method": response.retrieval_info.retrieval_method,
+            "total_found": response.retrieval_info.total_found,
+            "latency_ms": response.retrieval_info.latency_ms,
+        },
+        "latency_ms": response.latency_ms,
+    }
+
+
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "modules": {
+            "search": search_engine is not None,
+            "knowledge_graph": kg is not None,
+            "rag_pipeline": rag_pipeline is not None,
+        },
+    }
 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("src.app:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("src.app:app", host="0.0.0.0", port=9000, reload=True)

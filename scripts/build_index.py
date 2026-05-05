@@ -39,6 +39,7 @@ def build_search_index(docs_path: str = None, output_path: str = None):
             "type": doc.get("type", ""),
             "law_number": doc.get("law_number", ""),
             "issuer": doc.get("issuer", ""),
+            "content": content[:2000],  # Store truncated content for retrieval
         }
         if content:
             engine.add_document(content, metadata)
