@@ -16,10 +16,18 @@ from src.knowledge.graph_builder import LegalKnowledgeGraph
 from src.knowledge.reasoner import LegalReasoner
 from src.knowledge.visualizer import visualize_graph
 
+# My RAG Pipeline (Phần 2-3-4) - kept for backward compatibility
+from src.rag_pipeline import (
+    RAGPipeline as MyRAGPipeline,
+    RAGPipelineRequest,
+    MockPreprocessor,
+)
+
 app = Flask(__name__)
 CORS(app)
 
 rag_pipeline: Optional[RAGPipeline] = None
+my_rag_pipeline: Optional[MyRAGPipeline] = None
 search_engine: Optional[LegalSearchEngine] = None
 kg: Optional[LegalKnowledgeGraph] = None
 reasoner: Optional[LegalReasoner] = None
@@ -50,6 +58,14 @@ def _startup():
         kg = LegalKnowledgeGraph()
         kg.load(str(KG_PATH))
         reasoner = LegalReasoner(kg)
+
+    # Initialize my RAG Pipeline (Phần 2-3-4)
+    global my_rag_pipeline
+    my_rag_pipeline = MyRAGPipeline(
+        search_engine=search_engine,
+        reasoner=reasoner,
+    )
+    print("My RAG Pipeline initialized (Phần 2-3-4)")
 
 @app.get("/")
 def root():
@@ -161,10 +177,164 @@ def knowledge_visualize():
     output = visualize_graph(kg, output_path="legal_kg.html", max_nodes=max_nodes, focus_node=doc_id)
     return jsonify({"visualization": output})
 
+# ── My RAG Pipeline Endpoints (Phần 2-3-4) ─────────────────
+
+@app.post("/rag/retrieve")
+def rag_retrieve():
+    """Phần 2: Truy hồi tài liệu liên quan."""
+    body = request.get_json(force=True)
+    if my_rag_pipeline is None:
+        return jsonify({"error": "My RAG Pipeline not initialized."})
+
+    preprocessor = MockPreprocessor()
+    processed = preprocessor.process(body.get("question", ""))
+
+    result = my_rag_pipeline.retriever.retrieve(
+        question=processed,
+        top_k=body.get("top_k", 10),
+        filters=processed.filters,
+    )
+
+    return jsonify({
+        "query": result.query,
+        "documents": [
+            {
+                "doc_id": d.doc_id,
+                "content": d.content[:300] + "..." if len(d.content) > 300 else d.content,
+                "metadata": d.metadata,
+                "score": d.score,
+                "rank": d.rank,
+            }
+            for d in result.documents
+        ],
+        "total_found": result.total_found,
+        "method": result.retrieval_method,
+        "latency_ms": result.latency_ms,
+    })
+
+
+@app.post("/rag/augment")
+def rag_augment():
+    """Phần 3: Bổ sung ngữ cảnh từ retrieval results."""
+    body = request.get_json(force=True)
+    if my_rag_pipeline is None:
+        return jsonify({"error": "My RAG Pipeline not initialized."})
+
+    preprocessor = MockPreprocessor()
+    processed = preprocessor.process(body.get("question", ""))
+
+    retrieval_result = my_rag_pipeline.retriever.retrieve(
+        question=processed,
+        top_k=body.get("top_k", 10),
+        filters=processed.filters,
+    )
+
+    if reasoner is not None:
+        augmented = my_rag_pipeline.augmenter.augment_with_kg(
+            question=body.get("question", ""),
+            retrieval_result=retrieval_result,
+            reasoner=reasoner,
+            top_k=body.get("top_k_rerank", 5),
+        )
+    else:
+        augmented = my_rag_pipeline.augmenter.augment(
+            question=body.get("question", ""),
+            retrieval_result=retrieval_result,
+            top_k=body.get("top_k_rerank", 5),
+        )
+
+    return jsonify({
+        "original_question": augmented.original_question,
+        "context_text": augmented.context_text,
+        "documents_used": len(augmented.documents),
+        "token_count": augmented.token_count,
+        "strategy": augmented.context_strategy,
+        "rerank_scores": augmented.rerank_scores,
+    })
+
+
+@app.post("/rag/generate")
+def rag_generate():
+    """Phần 4: Sinh câu trả lời từ augmented context."""
+    body = request.get_json(force=True)
+    if my_rag_pipeline is None:
+        return jsonify({"error": "My RAG Pipeline not initialized."})
+
+    req = RAGPipelineRequest(
+        question=body.get("question", ""),
+        top_k_retrieval=body.get("top_k", 10),
+        top_k_rerank=body.get("top_k_rerank", 5),
+    )
+    response = my_rag_pipeline.run(req)
+
+    return jsonify({
+        "answer": response.answer,
+        "confidence": response.confidence,
+        "sources": [
+            {
+                "doc_id": s.doc_id,
+                "name": s.doc_name,
+                "excerpt": s.excerpt[:200] + "..." if len(s.excerpt) > 200 else s.excerpt,
+                "relevance": s.relevance_score,
+            }
+            for s in response.sources
+        ],
+        "reasoning": response.reasoning,
+        "latency_ms": response.latency_ms,
+    })
+
+
+@app.post("/rag/pipeline")
+def rag_pipeline_endpoint():
+    """Full RAG Pipeline (Phần 2→3→4): từ câu hỏi đến câu trả lời."""
+    body = request.get_json(force=True)
+    if my_rag_pipeline is None:
+        return jsonify({"error": "My RAG Pipeline not initialized."})
+
+    req = RAGPipelineRequest(
+        question=body.get("question", ""),
+        top_k_retrieval=body.get("top_k_retrieval", 10),
+        top_k_rerank=body.get("top_k_rerank", 5),
+        max_context_tokens=body.get("max_context_tokens", 1024),
+        use_reranker=body.get("use_reranker", True),
+        return_sources=body.get("return_sources", True),
+    )
+    response = my_rag_pipeline.run(req)
+
+    return jsonify({
+        "answer": response.answer,
+        "confidence": response.confidence,
+        "sources": [
+            {
+                "doc_id": s.doc_id,
+                "name": s.doc_name,
+                "excerpt": s.excerpt[:200] + "..." if len(s.excerpt) > 200 else s.excerpt,
+                "relevance": s.relevance_score,
+            }
+            for s in response.sources
+        ],
+        "reasoning": response.reasoning,
+        "retrieval": {
+            "method": response.retrieval_info.retrieval_method,
+            "total_found": response.retrieval_info.total_found,
+            "latency_ms": response.retrieval_info.latency_ms,
+        },
+        "latency_ms": response.latency_ms,
+    })
+
+
 @app.get("/health")
 def health():
-    return jsonify({"status": "ok"})
+    return jsonify({
+        "status": "ok",
+        "modules": {
+            "pipeline": rag_pipeline is not None,
+            "my_rag_pipeline": my_rag_pipeline is not None,
+            "search": search_engine is not None,
+            "knowledge_graph": kg is not None,
+        },
+    })
 
 if __name__ == "__main__":
     _startup()
-    app.run(host = "0.0.0.0", port = 8000, debug = True)
+    app.run(host = "0.0.0.0", port = 9010, debug = True)

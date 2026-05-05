@@ -17,10 +17,15 @@ class HybridSearch:
                 if cid not in bm25_map or rank < bm25_map[cid]["rank"]:
                     bm25_map[cid] = {"rank": rank, "data": result, "score": result.get("score", result.get("bm25_score", 0.0))}
 
-            for rank, result in enumerate(self._vector_store.search(query, n_results=n_results)):
-                cid = result.get("chunk_id", 0)
-                if cid not in vector_map or rank < vector_map[cid]["rank"]:
-                    vector_map[cid] = {"rank": rank, "data": result, "score": result.get("vector_score", 0.0)}
+            # Only search vector store if it's available
+            if hasattr(self._vector_store, 'is_available') and self._vector_store.is_available:
+                try:
+                    for rank, result in enumerate(self._vector_store.search(query, n_results=n_results)):
+                        cid = result.get("chunk_id", 0)
+                        if cid not in vector_map or rank < vector_map[cid]["rank"]:
+                            vector_map[cid] = {"rank": rank, "data": result, "score": result.get("vector_score", 0.0)}
+                except Exception:
+                    pass
 
         all_ids = set(bm25_map) | set(vector_map)
         scored = []

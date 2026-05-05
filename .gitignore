@@ -46,3 +46,4 @@ venv/
 # Large directories
 data/
 models/
+chroma_data/
