@@ -1,0 +1,13 @@
+Document
+   │
+   ▼
+[Chunking]
+   │
+   ▼
+PhoBERT (per chunk)
+   │
+   ▼
+[Merge Summary]
+   │
+   ▼
+Final Summary

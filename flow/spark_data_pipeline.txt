@@ -1,0 +1,16 @@
+Raw Legal Docs
+   │
+   ▼
+[Cleaning]
+   │
+   ▼
+[Chunking]
+ - Điều / Khoản
+   │
+   ▼
+[Embedding]
+   │
+   ▼
+ChromaDB
+
+Metadata → Postgres

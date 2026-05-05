@@ -1,0 +1,28 @@
+Context + Question
+   │
+   ▼
+[Step 1: Extract Facts]
+   │
+   ▼
+[Step 2: Identify Legal Issues]
+   │
+   ▼
+[Step 3: Map to Law]
+   │
+   ▼
+[Step 4: Apply Law]
+   │
+   ▼
+[Step 5: Conclusion]
+
+Structured Reasoning Input
+   │
+   ▼
+  LLM
+   │
+   ▼
+Structured Answer:
+ - Căn cứ pháp lý
+ - Phân tích
+ - Kết luận
+ - Khuyến nghị

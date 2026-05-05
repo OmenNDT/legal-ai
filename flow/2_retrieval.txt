@@ -1,0 +1,22 @@
+Structured Query
+   │
+   ▼
+[Multi-query Generation]
+   │
+   ▼
+┌───────────────┬───────────────┐
+▼               ▼
+BM25 Search     Vector Search
+(Postgres)      (ChromaDB)
+│               │
+└──────┬────────┘
+       ▼
+[Hybrid Merge]
+       │
+       ▼
+[Metadata Filter]
+ - loại luật
+ - hiệu lực
+       │
+       ▼
+Top-K (20–50 docs)

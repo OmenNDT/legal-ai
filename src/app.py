@@ -1,200 +1,170 @@
-"""FastAPI backend wiring all 4 LegalAI modules."""
-
-import json
+import os
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from flask import Flask, jsonify, request
+from flask_cors import CORS
 
 from src.common.config import (
     SEARCH_INDEX_PATH, KG_PATH,
-    INTENT_MODEL_DIR, NER_MODEL_DIR, SCORER_MODEL_DIR,
+    LLM_PROVIDER, LLM_MODEL, LLM_API_KEY, LLM_BASE_URL,
+    CHROMA_HOST, CHROMA_PORT, CHROMA_COLLECTION, EMBEDDING_MODEL, CROSS_ENCODER_MODEL,
 )
-
-# LoRA checkpoint for Luật Kế toán 2025
-LORA_CHECKPOINT_PATH = "data/models/lora_ke_toan/best_model.pt"
+from src.pipeline.rag_pipeline import RAGPipeline, PipelineConfig
 from src.search.search_engine import LegalSearchEngine
 from src.knowledge.graph_builder import LegalKnowledgeGraph
 from src.knowledge.reasoner import LegalReasoner
-from src.knowledge.visualizer import visualize_graph, visualize_amendment_chain
+from src.knowledge.visualizer import visualize_graph
 
+app = Flask(__name__)
+CORS(app)
 
-app = FastAPI(title="LegalAI Platform", version="0.1.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-
-# ── Global state (loaded on startup) ──────────────────
+rag_pipeline: Optional[RAGPipeline] = None
 search_engine: Optional[LegalSearchEngine] = None
 kg: Optional[LegalKnowledgeGraph] = None
 reasoner: Optional[LegalReasoner] = None
 
+def _startup():
+    global rag_pipeline, search_engine, kg, reasoner
 
-@app.on_event("startup")
-async def startup():
-    """Load models and indices on startup."""
-    global search_engine, kg, reasoner
+    config = PipelineConfig(
+        llm_provider = LLM_PROVIDER,
+        llm_model = LLM_MODEL,
+        llm_api_key = LLM_API_KEY,
+        llm_base_url = LLM_BASE_URL,
+        chroma_host = CHROMA_HOST,
+        chroma_port = CHROMA_PORT,
+        chroma_collection = CHROMA_COLLECTION,
+        embedding_model = EMBEDDING_MODEL,
+        cross_encoder_model = CROSS_ENCODER_MODEL,
+        kg_path = str(KG_PATH) if Path(KG_PATH).exists() else None,
+    )
+    rag_pipeline = RAGPipeline(config)
 
-    # Load search index
     if Path(SEARCH_INDEX_PATH).exists():
         search_engine = LegalSearchEngine()
         search_engine.index.load(str(SEARCH_INDEX_PATH))
         search_engine.build()
-        print(f"Search index loaded: {search_engine.index.doc_count} docs")
 
-    # Load knowledge graph
     if Path(KG_PATH).exists():
         kg = LegalKnowledgeGraph()
         kg.load(str(KG_PATH))
         reasoner = LegalReasoner(kg)
-        print(f"Knowledge graph loaded: {kg.node_count} nodes, {kg.edge_count} edges")
 
-
-# ── Request models ─────────────────────────────────────
-class QueryRequest(BaseModel):
-    question: str
-    top_k: int = 10
-
-class SearchRequest(BaseModel):
-    query: str
-    top_k: int = 10
-
-class SummarizeRequest(BaseModel):
-    document: str
-    query: str = ""
-    top_k: int = 4
-
-class KGQueryRequest(BaseModel):
-    doc_id: str
-    query_type: str = "validity"  # validity | amendments | related | path
-    target_id: Optional[str] = None
-
-
-# ── Endpoints ──────────────────────────────────────────
 @app.get("/")
 def root():
-    return {
+    return jsonify({
         "name": "LegalAI Platform",
-        "modules": ["chatbot", "search", "summarizer", "knowledge"],
+        "version": "1.0.0",
+        "pipeline_ready": rag_pipeline is not None,
         "search_loaded": search_engine is not None,
         "kg_loaded": kg is not None,
-    }
+    })
+
+@app.post("/chat")
+def chat():
+    body = request.get_json(force=True)
+    if rag_pipeline is None:
+        return jsonify({"error": "Pipeline not initialized."})
+    response = rag_pipeline.query(body["question"])
+    return jsonify({
+        "answer": response.answer,
+        "intent": response.intent,
+        "domain": response.domain,
+        "confidence": response.confidence,
+        "entities": response.entities,
+        "citations": response.citations,
+        "legal_basis": response.legal_basis,
+        "conclusion": response.conclusion,
+        "recommendation": response.recommendation,
+    })
 
 
 @app.post("/search")
-def search(req: SearchRequest):
-    """Search for legal documents."""
+def search():
+    body = request.get_json(force=True)
     if search_engine is None:
-        return {"error": "Search engine not loaded. Run build_index.py first."}
-    results = search_engine.search(req.query, top_k=req.top_k)
-    # Remove non-serializable model objects
+        return jsonify({"error": "Search engine not loaded. Run build_index.py first."})
+    results = search_engine.search(body["query"], top_k=body.get("top_k", 10))
     for r in results:
         r.pop("model", None)
-    return {"query": req.query, "results": results}
+    return jsonify({"query": body["query"], "results": results})
 
 
 @app.post("/search/autocomplete")
-def autocomplete(prefix: str, max_results: int = 10):
-    """Get autocomplete suggestions."""
+def autocomplete():
+    prefix = request.args.get("prefix", "")
+    max_results = int(request.args.get("max_results", 10))
     if search_engine is None:
-        return {"error": "Search engine not loaded."}
-    return {"suggestions": search_engine.autocomplete(prefix, max_results)}
+        return jsonify({"error": "Search engine not loaded."})
+    return jsonify({"suggestions": search_engine.autocomplete(prefix, max_results)})
 
 
 @app.post("/search/explain")
-def explain(query: str, doc_id: int):
-    """Explain BM25 scoring for a document."""
+def explain():
+    query = request.args.get("query", "")
+    doc_id = int(request.args.get("doc_id", 0))
     if search_engine is None:
-        return {"error": "Search engine not loaded."}
-    return search_engine.explain(query, doc_id)
-
+        return jsonify({"error": "Search engine not loaded."})
+    return jsonify(search_engine.explain(query, doc_id))
 
 @app.post("/summarize")
-def summarize(req: SummarizeRequest):
-    """Summarize a legal document."""
+def summarize():
+    body = request.get_json(force=True)
     from src.summarizer.summarizer import LegalSummarizer
-    summarizer = LegalSummarizer()
-    result = summarizer.summarize(
-        document=req.document,
-        query=req.query,
-        top_k=req.top_k,
-        use_model=False,  # Use TF-IDF fallback until model is trained
+    result = LegalSummarizer().summarize(
+        document=body["document"],
+        query=body.get("query", ""),
+        top_k=body.get("top_k", 4),
+        use_model=False,
     )
-    return {"summary": result["summary"], "selected_indices": result["selected_indices"]}
-
+    return jsonify({"summary": result["summary"], "selected_indices": result["selected_indices"]})
 
 @app.post("/knowledge/query")
-def knowledge_query(req: KGQueryRequest):
-    """Query the legal knowledge graph."""
+def knowledge_query():
+    body = request.get_json(force=True)
     if reasoner is None:
-        return {"error": "Knowledge graph not loaded. Run build_graph.py first."}
-
-    if req.query_type == "validity":
-        result = reasoner.check_validity(req.doc_id)
-    elif req.query_type == "amendments":
-        result = reasoner.trace_amendments(req.doc_id)
-    elif req.query_type == "related":
-        result = reasoner.find_related(req.doc_id)
-    elif req.query_type == "path" and req.target_id:
-        result = reasoner.find_reasoning_path(req.doc_id, req.target_id)
+        return jsonify({"error": "Knowledge graph not loaded. Run build_graph.py first."})
+    doc_id = body["doc_id"]
+    query_type = body.get("query_type", "validity")
+    target_id = body.get("target_id")
+    if query_type == "validity":
+        result = reasoner.check_validity(doc_id)
+    elif query_type == "amendments":
+        result = reasoner.trace_amendments(doc_id)
+    elif query_type == "related":
+        result = reasoner.find_related(doc_id)
+    elif query_type == "path" and target_id:
+        result = reasoner.find_reasoning_path(doc_id, target_id)
     else:
-        return {"error": f"Unknown query_type: {req.query_type}"}
-
-    return {
+        return jsonify({"error": f"Unknown query_type: {query_type}"})
+    return jsonify({
         "question": result.question,
         "answer": result.answer,
         "confidence": result.confidence,
         "reasoning_steps": result.reasoning_steps,
         "evidence": result.evidence,
-    }
-
+    })
 
 @app.post("/knowledge/stats")
 def knowledge_stats():
-    """Get knowledge graph statistics."""
     if kg is None:
-        return {"error": "Knowledge graph not loaded."}
-    return kg.get_stats()
-
+        return jsonify({"error": "Knowledge graph not loaded."})
+    return jsonify(kg.get_stats())
 
 @app.post("/knowledge/visualize")
-def knowledge_visualize(doc_id: Optional[str] = None, max_nodes: int = 100):
-    """Generate interactive visualization of the knowledge graph."""
+def knowledge_visualize():
+    doc_id = request.args.get("doc_id")
+    max_nodes = int(request.args.get("max_nodes", 100))
     if kg is None:
-        return {"error": "Knowledge graph not loaded."}
+        return jsonify({"error": "Knowledge graph not loaded."})
     output = visualize_graph(kg, output_path="legal_kg.html", max_nodes=max_nodes, focus_node=doc_id)
-    return {"visualization": output}
-
-
-@app.post("/chat")
-def chat(req: QueryRequest):
-    """Full chatbot pipeline: intent → NER → search → summarize → KG → response."""
-    from src.chatbot.pipeline import LegalChatbot
-
-    lora_path = LORA_CHECKPOINT_PATH if Path(LORA_CHECKPOINT_PATH).exists() else None
-    chatbot = LegalChatbot(
-        search_engine=search_engine,
-        knowledge_graph=kg,
-        lora_checkpoint_path=lora_path,
-    )
-    response = chatbot.ask(req.question, top_k_docs=req.top_k)
-
-    return {
-        "answer": response.answer,
-        "intent": response.intent,
-        "confidence": response.confidence,
-        "entities": response.entities,
-        "sources": response.sources,
-        "summary": response.summary,
-        "reasoning": response.reasoning,
-    }
-
+    return jsonify({"visualization": output})
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
-
+    return jsonify({"status": "ok"})
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("src.app:app", host="0.0.0.0", port=8000, reload=True)
+    _startup()
+    app.run(host = "0.0.0.0", port = 8000, debug = True)

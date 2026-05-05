@@ -1,0 +1,16 @@
+[Unit]
+Description=ChromaDB Vector Database
+After=network.target
+
+[Service]
+Type=simple
+User=minht
+WorkingDirectory=/home/minht
+ExecStart=/home/minht/.local/bin/chroma run --host 0.0.0.0 --port 8001 --path /home/minht/chroma_data
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

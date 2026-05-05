@@ -1,0 +1,62 @@
+                         ┌──────────────────────┐
+                         │      USER (UI)       │
+                         │     React Frontend   │
+                         └─────────┬────────────┘
+                                   │
+                                   ▼
+                         ┌──────────────────────┐
+                         │       NGINX          │
+                         │   Reverse Proxy      │
+                         └─────────┬────────────┘
+                                   │
+                                   ▼
+                         ┌──────────────────────┐
+                         │   Flask API Gateway  │
+                         │ Auth | Routing | Log │
+                         └─────────┬────────────┘
+                                   │
+         ┌─────────────────────────┼─────────────────────────┐
+         ▼                         ▼                         ▼
+┌──────────────────┐   ┌────────────────────┐    ┌────────────────────┐
+│ Chatbot Service  │   │ Summarization      │    │ Search Service     │
+│ (RAG Pipeline)   │   │ (PhoBART)          │    │ (Hybrid Search)    │
+└────────┬─────────┘   └────────┬───────────┘    └────────┬───────────┘
+         │                      │                         │
+         ▼                      ▼                         ▼
+
+==================== RAG PIPELINE (CORE) ====================
+
+1. QUERY UNDERSTANDING
+   ↓
+2. RETRIEVAL (Hybrid)
+   ↓
+3. RE-RANKING
+   ↓
+4. AUGMENTATION (Context Builder)
+   ↓
+5. REASONING (Legal Logic)
+   ↓
+6. GENERATION (LLM)
+   ↓
+7. POST-PROCESSING
+
+============================================================
+
+         │
+         ▼
+┌──────────────────────────────┐
+│        RESPONSE (UI)         │
+└──────────────────────────────┘
+
+==================== DATA LAYER ====================
+
+┌───────────────┐     ┌───────────────┐     ┌───────────────┐
+│   Postgres    │     │   ChromaDB    │     │     Redis     │
+│ Metadata      │     │ Vector Store  │     │ Session/Cache │
+└───────────────┘     └───────────────┘     └───────────────┘
+
+==================== DATA PIPELINE ====================
+
+Raw Docs → Spark ETL → Chunking → Embedding → ChromaDB
+                          ↓
+                      Metadata → Postgres

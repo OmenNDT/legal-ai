@@ -1,0 +1,25 @@
+postgresql:
+  driver: "org.postgresql.Driver"
+  url: "jdbc:postgresql://100.124.212.114:5432/legal_ai"
+  username: "postgres"
+  password: "${POSTGRES_PASSWORD}"
+
+llm:
+  provider: "${LLM_PROVIDER:openai}"
+  model: "${LLM_MODEL:gpt-4o-mini}"
+  api_key: "${LLM_API_KEY}"
+  base_url: "${LLM_BASE_URL:}"
+
+chromadb:
+  host: "${CHROMA_HOST:localhost}"
+  port: "${CHROMA_PORT:8001}"
+  collection: "legal_chunks"
+
+embedding:
+  model: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+
+retrieval:
+  top_k_candidates: 50
+  top_n_reranked: 10
+  bm25_weight: 0.5
+  vector_weight: 0.5
