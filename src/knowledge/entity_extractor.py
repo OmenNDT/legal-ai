@@ -123,7 +123,7 @@ class LegalRelationExtractor:
     RELATION_PATTERNS = {
         "DUA_TREN": [
             r"căn cứ\s+([\w\s]+?Luật[\w\s]+)",
-            "căn cứ\s+(.+?)(?:\s*[;,]\s*căn cứ)",
+            r"căn cứ\s+(.+?)(?:\s*[;,]\s*căn cứ)",
             r"dựa\s+trên\s+(.+?)(?:\s*[;,.])",
         ],
         "THAM_CHIEU": [

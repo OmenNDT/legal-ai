@@ -1,0 +1,33 @@
+User Query
+   │
+   ▼
+[Text Normalization]
+ - lower, remove noise
+ - chuẩn hóa tiếng Việt
+   │
+   ▼
+[Intent Classification]
+ - hỏi luật
+ - tình huống
+ - tóm tắt
+   │
+   ▼
+[NER - Legal Entity Extraction]
+ - hành vi
+ - đối tượng
+ - loại luật
+   │
+   ▼
+[Domain Detection]
+ - lao động / dân sự / hình sự
+   │
+   ▼
+[Query Expansion]
+ - synonym
+ - legal terms
+   │
+   ▼
+[Query Rewrite (LLM nhỏ)]
+   │
+   ▼
+Structured Query

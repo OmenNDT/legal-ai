@@ -1,0 +1,35 @@
+Top-K Candidates
+      │
+      ▼
+[Cross-Encoder Re-ranker]
+      │
+      ▼
+[Score Relevance]
+      │
+      ▼
+Top-N Docs (5–10 docs chất lượng cao)
+   │
+   ▼
+[Deduplicate]
+   │
+   ▼
+[Group by Document]
+   │
+   ▼
+[Legal Structuring]
+ - Điều / Khoản / Điểm
+   │
+   ▼
+[Metadata Injection]
+ - tên luật
+ - hiệu lực
+   │
+   ▼
+[Context Compression]
+ - nếu quá dài
+   │
+   ▼
+[Prompt Builder]
+ - system prompt
+ - context
+ - question

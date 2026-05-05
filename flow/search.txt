@@ -1,0 +1,10 @@
+Query
+   │
+   ▼
+Hybrid Search
+   │
+   ▼
+Re-ranking
+   │
+   ▼
+Top Documents + Highlight

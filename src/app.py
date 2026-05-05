@@ -1,391 +1,170 @@
-"""FastAPI backend wiring all 4 LegalAI modules."""
-
-import json
+import os
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from flask import Flask, jsonify, request
+from flask_cors import CORS
 
 from src.common.config import (
     SEARCH_INDEX_PATH, KG_PATH,
-    INTENT_MODEL_DIR, NER_MODEL_DIR, SCORER_MODEL_DIR,
+    LLM_PROVIDER, LLM_MODEL, LLM_API_KEY, LLM_BASE_URL,
+    CHROMA_HOST, CHROMA_PORT, CHROMA_COLLECTION, EMBEDDING_MODEL, CROSS_ENCODER_MODEL,
 )
-
-# LoRA checkpoint for Luật Kế toán 2025
-LORA_CHECKPOINT_PATH = "data/models/lora_ke_toan/best_model.pt"
+from src.pipeline.rag_pipeline import RAGPipeline, PipelineConfig
 from src.search.search_engine import LegalSearchEngine
 from src.knowledge.graph_builder import LegalKnowledgeGraph
 from src.knowledge.reasoner import LegalReasoner
-from src.knowledge.visualizer import visualize_graph, visualize_amendment_chain
+from src.knowledge.visualizer import visualize_graph
 
-# RAG Pipeline (Phần 2-3-4)
-from src.rag_pipeline import (
-    RAGPipeline,
-    RAGPipelineRequest,
-    RAGPipelineResponse,
-    MockPreprocessor,
-    MockPostprocessor,
-)
+app = Flask(__name__)
+CORS(app)
 
-
-app = FastAPI(title="LegalAI Platform", version="0.1.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-
-# ── Global state (loaded on startup) ──────────────────
+rag_pipeline: Optional[RAGPipeline] = None
 search_engine: Optional[LegalSearchEngine] = None
 kg: Optional[LegalKnowledgeGraph] = None
 reasoner: Optional[LegalReasoner] = None
-rag_pipeline: Optional[RAGPipeline] = None
 
+def _startup():
+    global rag_pipeline, search_engine, kg, reasoner
 
-@app.on_event("startup")
-async def startup():
-    """Load models and indices on startup."""
-    global search_engine, kg, reasoner, rag_pipeline
+    config = PipelineConfig(
+        llm_provider = LLM_PROVIDER,
+        llm_model = LLM_MODEL,
+        llm_api_key = LLM_API_KEY,
+        llm_base_url = LLM_BASE_URL,
+        chroma_host = CHROMA_HOST,
+        chroma_port = CHROMA_PORT,
+        chroma_collection = CHROMA_COLLECTION,
+        embedding_model = EMBEDDING_MODEL,
+        cross_encoder_model = CROSS_ENCODER_MODEL,
+        kg_path = str(KG_PATH) if Path(KG_PATH).exists() else None,
+    )
+    rag_pipeline = RAGPipeline(config)
 
-    # Load search index
     if Path(SEARCH_INDEX_PATH).exists():
         search_engine = LegalSearchEngine()
         search_engine.index.load(str(SEARCH_INDEX_PATH))
         search_engine.build()
-        print(f"Search index loaded: {search_engine.index.doc_count} docs")
 
-    # Load knowledge graph
     if Path(KG_PATH).exists():
         kg = LegalKnowledgeGraph()
         kg.load(str(KG_PATH))
         reasoner = LegalReasoner(kg)
-        print(f"Knowledge graph loaded: {kg.node_count} nodes, {kg.edge_count} edges")
 
-    # Initialize RAG Pipeline (Phần 2-3-4)
-    rag_pipeline = RAGPipeline(
-        search_engine=search_engine,
-        reasoner=reasoner,
-    )
-    print("RAG Pipeline initialized (Phần 2-3-4)")
-
-
-# ── Request models ─────────────────────────────────────
-class QueryRequest(BaseModel):
-    question: str
-    top_k: int = 10
-
-class SearchRequest(BaseModel):
-    query: str
-    top_k: int = 10
-
-class SummarizeRequest(BaseModel):
-    document: str
-    query: str = ""
-    top_k: int = 4
-
-class KGQueryRequest(BaseModel):
-    doc_id: str
-    query_type: str = "validity"  # validity | amendments | related | path
-    target_id: Optional[str] = None
-
-
-# ── Endpoints ──────────────────────────────────────────
 @app.get("/")
 def root():
-    return {
+    return jsonify({
         "name": "LegalAI Platform",
-        "modules": ["chatbot", "search", "summarizer", "knowledge"],
+        "version": "1.0.0",
+        "pipeline_ready": rag_pipeline is not None,
         "search_loaded": search_engine is not None,
         "kg_loaded": kg is not None,
-    }
+    })
+
+@app.post("/chat")
+def chat():
+    body = request.get_json(force=True)
+    if rag_pipeline is None:
+        return jsonify({"error": "Pipeline not initialized."})
+    response = rag_pipeline.query(body["question"])
+    return jsonify({
+        "answer": response.answer,
+        "intent": response.intent,
+        "domain": response.domain,
+        "confidence": response.confidence,
+        "entities": response.entities,
+        "citations": response.citations,
+        "legal_basis": response.legal_basis,
+        "conclusion": response.conclusion,
+        "recommendation": response.recommendation,
+    })
 
 
 @app.post("/search")
-def search(req: SearchRequest):
-    """Search for legal documents."""
+def search():
+    body = request.get_json(force=True)
     if search_engine is None:
-        return {"error": "Search engine not loaded. Run build_index.py first."}
-    results = search_engine.search(req.query, top_k=req.top_k)
-    # Remove non-serializable model objects
+        return jsonify({"error": "Search engine not loaded. Run build_index.py first."})
+    results = search_engine.search(body["query"], top_k=body.get("top_k", 10))
     for r in results:
         r.pop("model", None)
-    return {"query": req.query, "results": results}
+    return jsonify({"query": body["query"], "results": results})
 
 
 @app.post("/search/autocomplete")
-def autocomplete(prefix: str, max_results: int = 10):
-    """Get autocomplete suggestions."""
+def autocomplete():
+    prefix = request.args.get("prefix", "")
+    max_results = int(request.args.get("max_results", 10))
     if search_engine is None:
-        return {"error": "Search engine not loaded."}
-    return {"suggestions": search_engine.autocomplete(prefix, max_results)}
+        return jsonify({"error": "Search engine not loaded."})
+    return jsonify({"suggestions": search_engine.autocomplete(prefix, max_results)})
 
 
 @app.post("/search/explain")
-def explain(query: str, doc_id: int):
-    """Explain BM25 scoring for a document."""
+def explain():
+    query = request.args.get("query", "")
+    doc_id = int(request.args.get("doc_id", 0))
     if search_engine is None:
-        return {"error": "Search engine not loaded."}
-    return search_engine.explain(query, doc_id)
-
+        return jsonify({"error": "Search engine not loaded."})
+    return jsonify(search_engine.explain(query, doc_id))
 
 @app.post("/summarize")
-def summarize(req: SummarizeRequest):
-    """Summarize a legal document."""
+def summarize():
+    body = request.get_json(force=True)
     from src.summarizer.summarizer import LegalSummarizer
-    summarizer = LegalSummarizer()
-    result = summarizer.summarize(
-        document=req.document,
-        query=req.query,
-        top_k=req.top_k,
-        use_model=False,  # Use TF-IDF fallback until model is trained
+    result = LegalSummarizer().summarize(
+        document=body["document"],
+        query=body.get("query", ""),
+        top_k=body.get("top_k", 4),
+        use_model=False,
     )
-    return {"summary": result["summary"], "selected_indices": result["selected_indices"]}
-
+    return jsonify({"summary": result["summary"], "selected_indices": result["selected_indices"]})
 
 @app.post("/knowledge/query")
-def knowledge_query(req: KGQueryRequest):
-    """Query the legal knowledge graph."""
+def knowledge_query():
+    body = request.get_json(force=True)
     if reasoner is None:
-        return {"error": "Knowledge graph not loaded. Run build_graph.py first."}
-
-    if req.query_type == "validity":
-        result = reasoner.check_validity(req.doc_id)
-    elif req.query_type == "amendments":
-        result = reasoner.trace_amendments(req.doc_id)
-    elif req.query_type == "related":
-        result = reasoner.find_related(req.doc_id)
-    elif req.query_type == "path" and req.target_id:
-        result = reasoner.find_reasoning_path(req.doc_id, req.target_id)
+        return jsonify({"error": "Knowledge graph not loaded. Run build_graph.py first."})
+    doc_id = body["doc_id"]
+    query_type = body.get("query_type", "validity")
+    target_id = body.get("target_id")
+    if query_type == "validity":
+        result = reasoner.check_validity(doc_id)
+    elif query_type == "amendments":
+        result = reasoner.trace_amendments(doc_id)
+    elif query_type == "related":
+        result = reasoner.find_related(doc_id)
+    elif query_type == "path" and target_id:
+        result = reasoner.find_reasoning_path(doc_id, target_id)
     else:
-        return {"error": f"Unknown query_type: {req.query_type}"}
-
-    return {
+        return jsonify({"error": f"Unknown query_type: {query_type}"})
+    return jsonify({
         "question": result.question,
         "answer": result.answer,
         "confidence": result.confidence,
         "reasoning_steps": result.reasoning_steps,
         "evidence": result.evidence,
-    }
-
+    })
 
 @app.post("/knowledge/stats")
 def knowledge_stats():
-    """Get knowledge graph statistics."""
     if kg is None:
-        return {"error": "Knowledge graph not loaded."}
-    return kg.get_stats()
-
+        return jsonify({"error": "Knowledge graph not loaded."})
+    return jsonify(kg.get_stats())
 
 @app.post("/knowledge/visualize")
-def knowledge_visualize(doc_id: Optional[str] = None, max_nodes: int = 100):
-    """Generate interactive visualization of the knowledge graph."""
+def knowledge_visualize():
+    doc_id = request.args.get("doc_id")
+    max_nodes = int(request.args.get("max_nodes", 100))
     if kg is None:
-        return {"error": "Knowledge graph not loaded."}
+        return jsonify({"error": "Knowledge graph not loaded."})
     output = visualize_graph(kg, output_path="legal_kg.html", max_nodes=max_nodes, focus_node=doc_id)
-    return {"visualization": output}
-
-
-@app.post("/chat")
-def chat(req: QueryRequest):
-    """Full chatbot pipeline: intent → NER → search → summarize → KG → response."""
-    from src.chatbot.pipeline import LegalChatbot
-
-    lora_path = LORA_CHECKPOINT_PATH if Path(LORA_CHECKPOINT_PATH).exists() else None
-    chatbot = LegalChatbot(
-        search_engine=search_engine,
-        knowledge_graph=kg,
-        lora_checkpoint_path=lora_path,
-    )
-    response = chatbot.ask(req.question, top_k_docs=req.top_k)
-
-    return {
-        "answer": response.answer,
-        "intent": response.intent,
-        "confidence": response.confidence,
-        "entities": response.entities,
-        "sources": response.sources,
-        "summary": response.summary,
-        "reasoning": response.reasoning,
-    }
-
-
-# ── RAG Pipeline Endpoints (Phần 2-3-4) ─────────────────
-
-@app.post("/rag/retrieve")
-def rag_retrieve(req: QueryRequest):
-    """Phần 2: Truy hồi tài liệu liên quan.
-
-    Input: câu hỏi thô
-    Output: danh sách tài liệu được xếp hạng
-    """
-    if rag_pipeline is None:
-        return {"error": "RAG Pipeline not initialized."}
-
-    # Debug: check if search_engine is available
-    if rag_pipeline.retriever.search_engine is None:
-        return {"error": "Search engine not available in retriever"}
-
-    from src.rag_pipeline import MockPreprocessor
-    preprocessor = MockPreprocessor()
-    processed = preprocessor.process(req.question)
-
-    # Debug info
-    debug_info = {
-        "question": req.question,
-        "segmented": processed.segmented_text,
-        "intent": processed.intent,
-        "filters": processed.filters,
-        "search_engine_doc_count": rag_pipeline.retriever.search_engine.index.doc_count if rag_pipeline.retriever.search_engine else 0,
-    }
-
-    result = rag_pipeline.retriever.retrieve(
-        question=processed,
-        top_k=req.top_k,
-        filters=processed.filters,
-    )
-
-    return {
-        "query": result.query,
-        "debug": debug_info,
-        "documents": [
-            {
-                "doc_id": d.doc_id,
-                "content": d.content[:300] + "..." if len(d.content) > 300 else d.content,
-                "metadata": d.metadata,
-                "score": d.score,
-                "rank": d.rank,
-            }
-            for d in result.documents
-        ],
-        "total_found": result.total_found,
-        "method": result.retrieval_method,
-        "latency_ms": result.latency_ms,
-    }
-
-
-@app.post("/rag/augment")
-def rag_augment(req: QueryRequest):
-    """Phần 3: Bổ sung ngữ cảnh từ retrieval results.
-
-    Input: câu hỏi thô
-    Output: augmented context đã rerank
-    """
-    if rag_pipeline is None:
-        return {"error": "RAG Pipeline not initialized."}
-
-    from src.rag_pipeline import MockPreprocessor
-    preprocessor = MockPreprocessor()
-    processed = preprocessor.process(req.question)
-
-    retrieval_result = rag_pipeline.retriever.retrieve(
-        question=processed,
-        top_k=req.top_k,
-        filters=processed.filters,
-    )
-
-    if reasoner is not None:
-        augmented = rag_pipeline.augmenter.augment_with_kg(
-            question=req.question,
-            retrieval_result=retrieval_result,
-            reasoner=reasoner,
-            top_k=5,
-        )
-    else:
-        augmented = rag_pipeline.augmenter.augment(
-            question=req.question,
-            retrieval_result=retrieval_result,
-            top_k=5,
-        )
-
-    return {
-        "original_question": augmented.original_question,
-        "context_text": augmented.context_text,
-        "documents_used": len(augmented.documents),
-        "token_count": augmented.token_count,
-        "strategy": augmented.context_strategy,
-        "rerank_scores": augmented.rerank_scores,
-    }
-
-
-@app.post("/rag/generate")
-def rag_generate(req: QueryRequest):
-    """Phần 4: Sinh câu trả lời từ augmented context.
-
-    Input: câu hỏi thô
-    Output: câu trả lời với citations
-    """
-    if rag_pipeline is None:
-        return {"error": "RAG Pipeline not initialized."}
-
-    request = RAGPipelineRequest(
-        question=req.question,
-        top_k_retrieval=req.top_k,
-        top_k_rerank=5,
-    )
-    response = rag_pipeline.run(request)
-
-    return {
-        "answer": response.answer,
-        "confidence": response.confidence,
-        "sources": [
-            {
-                "doc_id": s.doc_id,
-                "name": s.doc_name,
-                "excerpt": s.excerpt[:200] + "..." if len(s.excerpt) > 200 else s.excerpt,
-                "relevance": s.relevance_score,
-            }
-            for s in response.sources
-        ],
-        "reasoning": response.reasoning,
-        "latency_ms": response.latency_ms,
-    }
-
-
-@app.post("/rag/pipeline")
-def rag_pipeline_endpoint(req: RAGPipelineRequest):
-    """Full RAG Pipeline (Phần 2→3→4): từ câu hỏi đến câu trả lời.
-
-    Đây là endpoint chính cho phần của bạn.
-    Input: câu hỏi + config
-    Output: câu trả lời đầy đủ với sources và reasoning
-    """
-    if rag_pipeline is None:
-        return {"error": "RAG Pipeline not initialized. Run build_index.py first."}
-
-    response = rag_pipeline.run(req)
-
-    return {
-        "answer": response.answer,
-        "confidence": response.confidence,
-        "sources": [
-            {
-                "doc_id": s.doc_id,
-                "name": s.doc_name,
-                "excerpt": s.excerpt[:200] + "..." if len(s.excerpt) > 200 else s.excerpt,
-                "relevance": s.relevance_score,
-            }
-            for s in response.sources
-        ],
-        "reasoning": response.reasoning,
-        "retrieval": {
-            "method": response.retrieval_info.retrieval_method,
-            "total_found": response.retrieval_info.total_found,
-            "latency_ms": response.retrieval_info.latency_ms,
-        },
-        "latency_ms": response.latency_ms,
-    }
-
+    return jsonify({"visualization": output})
 
 @app.get("/health")
 def health():
-    return {
-        "status": "ok",
-        "modules": {
-            "search": search_engine is not None,
-            "knowledge_graph": kg is not None,
-            "rag_pipeline": rag_pipeline is not None,
-        },
-    }
-
+    return jsonify({"status": "ok"})
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("src.app:app", host="0.0.0.0", port=9000, reload=True)
+    _startup()
+    app.run(host = "0.0.0.0", port = 8000, debug = True)

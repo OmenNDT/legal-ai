@@ -1,0 +1,16 @@
+Raw Answer
+   │
+   ▼
+[Hallucination Check]
+   │
+   ▼
+[Citation Injection]
+   │
+   ▼
+[Formatting]
+   │
+   ▼
+[Confidence Score]
+   │
+   ▼
+Final Response
