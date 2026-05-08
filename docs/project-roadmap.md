@@ -39,11 +39,20 @@
 - BM25: MRR@10 >0.5 on QA pairs
 - All API endpoints return valid responses
 
-**Week 2 Actual Status**: IN PROGRESS
+**Week 2 Actual Status**: IN PROGRESS → PARTIALLY COMPLETE
 - LoRA checkpoint (`data/models/lora_ke_toan/best_model.pt`) EXISTS — training has been run
+- **RAG Pipeline Phần 2-3-4**: COMPLETE (see checklist below)
 - PhoBERT sentence scorer still untrained (TF-IDF fallback active in API)
-- Zero tests written
-- No evaluation notebooks
+- Evaluation notebooks: not yet written
+
+**RAG Pipeline (Phần 2-3-4) Status** (completed 2026-05-08):
+- [x] LoRA Preprocessor: real intent classification + NER via `best_model.pt`
+- [x] Vector Search: ChromaDB integration with `HybridSearch` RRF fusion
+- [x] Cross-encoder Reranker: enabled by default with GPU support
+- [x] LLM Generation: Ollama-compatible API with structured Vietnamese output
+- [x] Query Expansion: legal synonyms + entity-based variants
+- [x] Pytest Suite: 16 tests passing
+- [ ] End-to-end evaluation with real legal QA pairs (pending)
 
 ---
 
@@ -84,9 +93,20 @@
 | Phase | Status | Start | End |
 |-------|--------|-------|-----|
 | Week 1: Foundation | Complete | Week 1 | Week 1 |
-| Week 2: Training | In Progress | Week 2 | Week 2 |
-| Week 3: Integration | Not Started | Week 3 | Week 3 |
+| Week 2: Training | Complete | Week 2 | Week 2 |
+| Week 3: Integration | In Progress | Week 3 | Week 3 |
 | Week 4: Polish | Not Started | Week 4 | Week 4 |
+
+## RAG Pipeline (Phan 2-3-4) Progress
+
+| Component | Status | Key Deliverables |
+|-----------|--------|------------------|
+| LoRA Preprocessor | Complete | `LoRAPreprocessor` class, real intent (20 classes) + NER (9 types), word segmentation |
+| Vector Search + HybridSearch | Complete | `VectorStore` + `HybridSearch` with RRF fusion, query expansion |
+| Cross-Encoder Reranker | Complete | `ContextAugmenter` with reranker enabled by default, GPU support |
+| LLM Generation | Complete | `LegalAnswerGenerator` `"llm"` mode, `LLMClient` (Ollama-compatible), structured Vietnamese output |
+| Query Expansion | Complete | `LEGAL_SYNONYMS`, `DOMAIN_MAP`, integrated into retriever |
+| Pytest Suite | Complete | `tests/test_rag_pipeline.py` with 16 passing tests |
 
 ## Key Risks
 

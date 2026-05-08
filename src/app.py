@@ -12,11 +12,12 @@ from src.common.config import (
 )
 from src.pipeline.rag_pipeline import RAGPipeline, PipelineConfig
 from src.search.search_engine import LegalSearchEngine
+from src.search.vector_store import VectorStore
 from src.knowledge.graph_builder import LegalKnowledgeGraph
 from src.knowledge.reasoner import LegalReasoner
 from src.knowledge.visualizer import visualize_graph
 
-# My RAG Pipeline (Phần 2-3-4) - kept for backward compatibility
+# My RAG Pipeline (Phần 2-3-4)
 from src.rag_pipeline import (
     RAGPipeline as MyRAGPipeline,
     RAGPipelineRequest,
@@ -61,9 +62,48 @@ def _startup():
 
     # Initialize my RAG Pipeline (Phần 2-3-4)
     global my_rag_pipeline
+
+    # Vector store + hybrid search
+    vector_store = None
+    hybrid_search = None
+    if search_engine is not None:
+        try:
+            vector_store = VectorStore(
+                collection_name=CHROMA_COLLECTION,
+                embedding_model=EMBEDDING_MODEL,
+                host=CHROMA_HOST,
+                port=CHROMA_PORT,
+            )
+            from src.search.hybrid_search import HybridSearch
+            hybrid_search = HybridSearch(
+                bm25=search_engine.bm25,
+                vector_store=vector_store,
+                bm25_weight=0.5,
+                vector_weight=0.5,
+            )
+        except Exception as exc:
+            print(f"Warning: Could not initialize vector store: {exc}")
+
+    # LLM client (Ollama / OpenAI compatible)
+    llm_client = None
+    if LLM_API_KEY:
+        try:
+            from src.llm.client import LLMClient
+            llm_client = LLMClient(
+                provider=LLM_PROVIDER,
+                model=LLM_MODEL,
+                api_key=LLM_API_KEY,
+                base_url=LLM_BASE_URL,
+            )
+        except Exception as exc:
+            print(f"Warning: Could not initialize LLM client: {exc}")
+
     my_rag_pipeline = MyRAGPipeline(
         search_engine=search_engine,
         reasoner=reasoner,
+        vector_store=vector_store,
+        hybrid_search=hybrid_search,
+        llm_client=llm_client,
     )
     print("My RAG Pipeline initialized (Phần 2-3-4)")
 
@@ -186,8 +226,7 @@ def rag_retrieve():
     if my_rag_pipeline is None:
         return jsonify({"error": "My RAG Pipeline not initialized."})
 
-    preprocessor = MockPreprocessor()
-    processed = preprocessor.process(body.get("question", ""))
+    processed = my_rag_pipeline.preprocessor.process(body.get("question", ""))
 
     result = my_rag_pipeline.retriever.retrieve(
         question=processed,
@@ -220,8 +259,7 @@ def rag_augment():
     if my_rag_pipeline is None:
         return jsonify({"error": "My RAG Pipeline not initialized."})
 
-    preprocessor = MockPreprocessor()
-    processed = preprocessor.process(body.get("question", ""))
+    processed = my_rag_pipeline.preprocessor.process(body.get("question", ""))
 
     retrieval_result = my_rag_pipeline.retriever.retrieve(
         question=processed,

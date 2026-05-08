@@ -135,6 +135,58 @@ LegalKnowledgeGraph (NetworkX DiGraph)
         visualize_amendment_chain() -> focused subgraph visualization
 ```
 
+## RAG Pipeline (Phần 2-3-4)
+
+```
+User Question (Vietnamese)
+    |
+    v
++----------------------------------+
+| LoRAPreprocessor (Phần 1)        |
+| - Word segmentation (VnCoreNLP)  |
+| - Intent classification (LoRA)   |  20 intents
+| - NER extraction (LoRA)          |  9 entity types (BIO)
+| - Build metadata filters         |
++----------------------------------+
+    |
+    v
++----------------------------------+
+| LegalRetriever (Phần 2)          |
+| - Query expansion (synonyms)     |
+| - BM25 (custom InvertedIndex)    |
+| - Vector search (ChromaDB)       |
+| - HybridSearch (RRF fusion)      |
+| - Metadata filters               |
++----------------------------------+
+    |
+    v
++----------------------------------+
+| ContextAugmenter (Phần 3)        |
+| - Cross-encoder reranking        |
+| - Context window building        |
+| - KG reasoning integration       |
+| - Token count control            |
++----------------------------------+
+    |
+    v
++----------------------------------+
+| LegalAnswerGenerator (Phần 4)    |
+| - LLM mode (Ollama / OpenAI)     |  Structured Vietnamese output
+| - Extractive fallback            |  Sentence scoring + templates
+| - Citations + reasoning steps    |
++----------------------------------+
+    |
+    v
+RAGPipelineResponse
+(answer, confidence, sources, reasoning, retrieval_info)
+```
+
+**API Endpoints (Phần 2-3-4)**:
+- `POST /rag/retrieve` — Document retrieval with expansion + hybrid search
+- `POST /rag/augment` — Context augmentation with reranking
+- `POST /rag/generate` — Answer generation (LLM or extractive)
+- `POST /rag/pipeline` — Full 2→3→4 pipeline
+
 ## Data Pipeline
 
 ### Core Pipeline

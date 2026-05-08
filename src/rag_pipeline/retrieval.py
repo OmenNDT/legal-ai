@@ -8,11 +8,23 @@ Hỗ trợ 2 chế độ:
   - Vector search (nếu có ChromaDB / sentence-transformers)
 """
 
+import logging
 import time
 from typing import Optional
 
 from src.rag_pipeline.contracts import ProcessedQuestion, RetrievedDocument, RetrievalResult
+from src.rag_pipeline.query_expansion import expand_query
+from src.rag_pipeline.retrieval_utils import (
+    convert_hybrid_results,
+    convert_vector_results,
+    deduplicate_docs,
+    HybridReranker,
+)
+from src.search.hybrid_search import HybridSearch
 from src.search.search_engine import LegalSearchEngine
+from src.search.vector_store import VectorStore
+
+logger = logging.getLogger(__name__)
 
 
 class LegalRetriever:
@@ -22,6 +34,8 @@ class LegalRetriever:
         search_engine: LegalSearchEngine đã load sẵn index
         use_vector: Nếu True, thử dùng vector search (nếu có embedding)
         vector_weight: Trọng số cho vector score trong hybrid search (0-1)
+        vector_store: VectorStore instance for ChromaDB search
+        hybrid_search: HybridSearch instance for RRF fusion
     """
 
     def __init__(
@@ -29,11 +43,14 @@ class LegalRetriever:
         search_engine: Optional[LegalSearchEngine] = None,
         use_vector: bool = False,
         vector_weight: float = 0.3,
+        vector_store: Optional[VectorStore] = None,
+        hybrid_search: Optional[HybridSearch] = None,
     ):
         self.search_engine = search_engine
-        self.use_vector = False  # Disabled by default to avoid model download
+        self.use_vector = use_vector
         self.vector_weight = vector_weight
-        self._embedding_model = None
+        self.vector_store = vector_store
+        self.hybrid_search = hybrid_search
         self._docs_cache: dict[str, str] = {}
         self._load_docs_cache()
 
@@ -52,54 +69,59 @@ class LegalRetriever:
         except Exception:
             pass
 
-    def _load_embedding_model(self):
-        """Lazy-load sentence embedding model cho vector search."""
-        if self._embedding_model is not None:
-            return
-        try:
-            from sentence_transformers import SentenceTransformer
-            self._embedding_model = SentenceTransformer("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
-        except ImportError:
-            self.use_vector = False  # Fallback to BM25
-
     def retrieve(
         self,
         question: ProcessedQuestion,
         top_k: int = 10,
         filters: Optional[dict] = None,
     ) -> RetrievalResult:
-        """Truy hồi top-k tài liệu liên quan.
-
-        Args:
-            question: Câu hỏi đã qua tiền xử lý
-            top_k: Số tài liệu cần lấy
-            filters: Metadata filters (doc_type, date_range, ...)
-
-        Returns:
-            RetrievalResult với danh sách RetrievedDocument
-        """
+        """Truy hồi top-k tài liệu liên quan."""
         start_time = time.time()
-
-        # Ưu tiên segmented_text nếu có, nếu không dùng raw_text
         query_text = question.segmented_text or question.raw_text
+        expanded_queries = expand_query(query_text, question.entities)
 
-        # Nếu có entities, bổ sung vào query để tăng độ chính xác
-        enriched_query = self._enrich_query(query_text, question.entities)
+        results: list[RetrievedDocument] = []
 
-        # Thực hiện search
-        if self.search_engine is not None:
-            results = self._search_bm25(enriched_query, top_k, filters)
-        else:
-            # Fallback: không có search engine
-            results = []
+        # Prefer HybridSearch when available and vector enabled
+        if self.use_vector and self.hybrid_search is not None:
+            try:
+                raw = self.hybrid_search.search(expanded_queries, n_results=top_k * 2)
+                results = convert_hybrid_results(raw)
+            except Exception as exc:
+                logger.warning("HybridSearch failed: %s", exc)
 
-        # Nếu bật vector search, kết hợp hybrid ranking
-        if self.use_vector and results:
-            results = self._hybrid_rerank(enriched_query, results)
+        # Fallback: BM25 (+ optional local vector rerank)
+        if not results and self.search_engine is not None:
+            for eq in expanded_queries:
+                results.extend(self._search_bm25(eq, top_k, filters))
+            results = deduplicate_docs(results)
 
-        # Lọc theo metadata filters nếu có
+            if self.use_vector and self.vector_store and self.vector_store.is_available:
+                try:
+                    vec_results = self.vector_store.search(query_text, n_results=top_k * 2)
+                    vec_docs = convert_vector_results(vec_results)
+                    merged = {d.doc_id: d for d in results}
+                    for vd in vec_docs:
+                        if vd.doc_id in merged:
+                            if vd.score > merged[vd.doc_id].score:
+                                merged[vd.doc_id] = vd
+                        else:
+                            merged[vd.doc_id] = vd
+                    results = list(merged.values())
+                    reranker = HybridReranker(vector_weight=self.vector_weight)
+                    results = reranker.rerank(query_text, results)
+                except Exception as exc:
+                    logger.warning("Vector search failed: %s", exc)
+
+        if not results and not self.search_engine:
+            logger.warning("No search engine available for retrieval")
+
         if filters:
             results = self._apply_filters(results, filters)
+
+        results.sort(key=lambda d: d.score, reverse=True)
+        for i, doc in enumerate(results, start=1):
+            doc.rank = i
 
         latency = (time.time() - start_time) * 1000
 
@@ -128,18 +150,13 @@ class LegalRetriever:
         filters: Optional[dict],
     ) -> list[RetrievedDocument]:
         """Search bằng BM25 từ LegalSearchEngine."""
-        raw_results = self.search_engine.search(query, top_k=top_k * 2)  # Lấy nhiều hơn để rerank
-
-        # Lazy load full docs if cache is empty
+        raw_results = self.search_engine.search(query, top_k=top_k * 2)
         if not self._docs_cache:
             self._load_docs_cache()
-
         docs = []
         for rank, r in enumerate(raw_results, start=1):
             doc_id = str(r.get("doc_id", rank))
-            # Get content from cache first, then from result metadata
             content = self._docs_cache.get(doc_id, r.get("content", ""))
-            
             doc = RetrievedDocument(
                 doc_id=doc_id,
                 content=content,
@@ -155,50 +172,6 @@ class LegalRetriever:
             docs.append(doc)
         return docs
 
-    def _hybrid_rerank(
-        self,
-        query: str,
-        docs: list[RetrievedDocument],
-    ) -> list[RetrievedDocument]:
-        """Kết hợp BM25 score + vector similarity."""
-        self._load_embedding_model()
-        if self._embedding_model is None:
-            return docs
-
-        try:
-            import numpy as np
-            from sklearn.metrics.pairwise import cosine_similarity
-
-            query_emb = self._embedding_model.encode([query])
-            doc_texts = [d.content for d in docs]
-            doc_embs = self._embedding_model.encode(doc_texts)
-
-            similarities = cosine_similarity(query_emb, doc_embs)[0]
-
-            # Normalize scores
-            bm25_scores = np.array([d.score for d in docs])
-            if bm25_scores.max() > 0:
-                bm25_scores = bm25_scores / bm25_scores.max()
-
-            vec_scores = np.array(similarities)
-            if vec_scores.max() > 0:
-                vec_scores = vec_scores / vec_scores.max()
-
-            # Hybrid score
-            hybrid = (1 - self.vector_weight) * bm25_scores + self.vector_weight * vec_scores
-
-            for i, doc in enumerate(docs):
-                doc.score = float(hybrid[i])
-
-            docs.sort(key=lambda d: d.score, reverse=True)
-            for i, doc in enumerate(docs, start=1):
-                doc.rank = i
-
-        except Exception:
-            pass  # Giữ nguyên BM25 nếu lỗi
-
-        return docs
-
     def _apply_filters(
         self,
         docs: list[RetrievedDocument],
@@ -211,7 +184,6 @@ class LegalRetriever:
             match = True
             for key, value in filters.items():
                 if key in meta and meta[key] != value:
-                    # Also check Vietnamese aliases
                     if key == "doc_type" and value == "luat" and meta[key] == "law":
                         continue
                     if key == "doc_type" and value == "nghi_dinh" and meta[key] == "decree":

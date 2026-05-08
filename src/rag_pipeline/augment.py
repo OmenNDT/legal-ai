@@ -14,6 +14,7 @@ from src.rag_pipeline.contracts import (
     RetrievedDocument,
     AugmentedContext,
 )
+from src.common.config import CROSS_ENCODER_MODEL
 
 
 class ContextAugmenter:
@@ -23,17 +24,20 @@ class ContextAugmenter:
         max_tokens: Số token tối đa trong context window
         overlap_tokens: Số token overlap giữa các đoạn
         use_reranker: Có dùng cross-encoder reranker không
+        reranker_model: Tên model cross-encoder
     """
 
     def __init__(
         self,
         max_tokens: int = 1024,
         overlap_tokens: int = 50,
-        use_reranker: bool = False,
+        use_reranker: bool = True,
+        reranker_model: str = CROSS_ENCODER_MODEL,
     ):
         self.max_tokens = max_tokens
         self.overlap_tokens = overlap_tokens
         self.use_reranker = use_reranker
+        self.reranker_model = reranker_model
         self._reranker = None
 
     def _load_reranker(self):
@@ -41,8 +45,10 @@ class ContextAugmenter:
         if self._reranker is not None or not self.use_reranker:
             return
         try:
+            import torch
             from sentence_transformers import CrossEncoder
-            self._reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            self._reranker = CrossEncoder(self.reranker_model, device=device)
         except Exception:
             self.use_reranker = False
 

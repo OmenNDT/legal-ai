@@ -34,12 +34,36 @@ class RAGPipeline:
         retriever: Optional[LegalRetriever] = None,
         augmenter: Optional[ContextAugmenter] = None,
         generator: Optional[LegalAnswerGenerator] = None,
+        vector_store=None,
+        hybrid_search=None,
+        llm_client=None,
     ):
         # Khởi tạo các thành phần với defaults
-        self.retriever = retriever or LegalRetriever(search_engine=search_engine)
-        self.augmenter = augmenter or ContextAugmenter()
-        self.generator = generator or LegalAnswerGenerator()
+        self.retriever = retriever or LegalRetriever(
+            search_engine=search_engine,
+            use_vector=True,
+            vector_store=vector_store,
+            hybrid_search=hybrid_search,
+        )
+        self.augmenter = augmenter or ContextAugmenter(
+            use_reranker=True,
+        )
+        self.generator = generator or LegalAnswerGenerator(
+            generation_mode="llm" if llm_client else "extractive",
+            llm_client=llm_client,
+        )
         self.reasoner = reasoner
+
+        # Preprocessor: real LoRA if checkpoint exists, else mock
+        from src.rag_pipeline.preprocessor import LoRAPreprocessor
+        from src.common.config import LORA_CHECKPOINT_PATH
+
+        if LORA_CHECKPOINT_PATH.exists():
+            self.preprocessor = LoRAPreprocessor(checkpoint_path=str(LORA_CHECKPOINT_PATH))
+        else:
+            from src.rag_pipeline.mock_adapters import MockPreprocessor
+
+            self.preprocessor = MockPreprocessor()
 
     def run(self, request: RAGPipelineRequest) -> RAGPipelineResponse:
         """Chạy toàn bộ pipeline 2→3→4.
@@ -54,10 +78,7 @@ class RAGPipeline:
         total_start = time.time()
 
         # ── Bước 0: Tạo ProcessedQuestion từ raw question ──
-        # Trong thực tế, phần này từ Phần 1 (Preprocessing)
-        from src.rag_pipeline.mock_adapters import MockPreprocessor
-        preprocessor = MockPreprocessor()
-        processed = preprocessor.process(request.question)
+        processed = self.preprocessor.process(request.question)
 
         # ── Phần 2: RETRIEVAL ──
         retrieval_result = self.retriever.retrieve(

@@ -20,6 +20,7 @@ from src.rag_pipeline.augment import ContextAugmenter
 from src.rag_pipeline.generation import LegalAnswerGenerator
 from src.rag_pipeline.pipeline import RAGPipeline
 from src.rag_pipeline.mock_adapters import MockPreprocessor, MockPostprocessor
+from src.rag_pipeline.preprocessor import LoRAPreprocessor
 
 __all__ = [
     "ProcessedQuestion",
@@ -35,4 +36,5 @@ __all__ = [
     "RAGPipeline",
     "MockPreprocessor",
     "MockPostprocessor",
+    "LoRAPreprocessor",
 ]

@@ -16,6 +16,7 @@ LEGAL_DATA_PATH = RAW_DIR / "uts_vlc_processed.json"
 INTENT_MODEL_DIR = MODELS_DIR / "intent_classifier"
 NER_MODEL_DIR = MODELS_DIR / "ner_tagger"
 SCORER_MODEL_DIR = MODELS_DIR / "sentence_scorer"
+LORA_CHECKPOINT_PATH = MODELS_DIR / "lora_ke_toan" / "best_model.pt"
 SEARCH_INDEX_PATH = PROCESSED_DIR / "search_index.json"
 KG_PATH = PROCESSED_DIR / "knowledge_graph.gpickle"
 

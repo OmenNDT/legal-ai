@@ -6,15 +6,25 @@ Luồng xử lý:
 Mục tiêu: Sinh câu trả lời chất lượng cao, có trích dẫn nguồn.
 """
 
+from __future__ import annotations
+
+import logging
 import time
-import re
 from typing import Optional
 
-import torch
-from transformers import AutoTokenizer, AutoModel
-
 from src.rag_pipeline.contracts import AugmentedContext, GeneratedAnswer, Citation
-from src.common.config import PHOBERT_MODEL, MAX_SEQ_LENGTH
+from src.rag_pipeline.generation_utils import (
+    split_into_sentences,
+    score_sentences,
+    build_answer_from_sentences,
+)
+
+try:
+    from src.llm.client import LLMClient
+except ImportError:
+    LLMClient = None  # type: ignore[misc,assignment]
+
+logger = logging.getLogger(__name__)
 
 
 class LegalAnswerGenerator:
@@ -22,67 +32,32 @@ class LegalAnswerGenerator:
 
     Hỗ trợ 2 chế độ:
       - "extractive": Trích xuất câu trả lời từ context (mặc định, không cần LLM)
-      - "generative": Dùng PhoBERT để paraphrase/tóm tắt (nếu có GPU)
-
-    Args:
-        model_name: Tên model PhoBERT
-        device: "cpu" hoặc "cuda"
-        generation_mode: "extractive" | "generative"
+      - "llm": Dùng LLM client (Ollama/OpenAI-compatible)
     """
 
     def __init__(
         self,
-        model_name: str = PHOBERT_MODEL,
-        device: str = "cpu",
         generation_mode: str = "extractive",
+        llm_client: Optional[LLMClient] = None,
     ):
-        self.model_name = model_name
-        self.device = device
         self.generation_mode = generation_mode
-        self.tokenizer: Optional[AutoTokenizer] = None
-        self.model: Optional[AutoModel] = None
-        self._loaded = False
-
-    def _load_model(self):
-        """Lazy-load PhoBERT model."""
-        if self._loaded or self.generation_mode == "extractive":
-            return
-        try:
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-            self.model = AutoModel.from_pretrained(self.model_name)
-            self.model.to(self.device)
-            self.model.eval()
-            self._loaded = True
-        except Exception:
-            self.generation_mode = "extractive"  # Fallback
+        self.llm_client = llm_client
 
     def generate(
         self,
         context: AugmentedContext,
         max_length: int = 512,
     ) -> GeneratedAnswer:
-        """Sinh câu trả lời từ augmented context.
-
-        Args:
-            context: AugmentedContext từ Phần 3
-            max_length: Độ dài tối đa câu trả lời
-
-        Returns:
-            GeneratedAnswer với câu trả lời và citations
-        """
+        """Sinh câu trả lời từ augmented context."""
         start_time = time.time()
 
-        if self.generation_mode == "generative":
-            answer = self._generate_generative(context, max_length)
+        if self.generation_mode == "llm" and self.llm_client is not None:
+            answer = self._generate_llm(context, max_length)
         else:
             answer = self._generate_extractive(context)
 
-        # Trích xuất citations từ documents
         citations = self._extract_citations(context)
-
-        # Xây dựng reasoning steps
         reasoning = self._build_reasoning(context)
-
         latency = (time.time() - start_time) * 1000
 
         return GeneratedAnswer(
@@ -95,66 +70,43 @@ class LegalAnswerGenerator:
         )
 
     def _generate_extractive(self, context: AugmentedContext) -> str:
-        """Trích xuất câu trả lời từ context (không dùng generative model).
-
-        Chiến lược:
-        1. Tìm sentences trong context liên quan nhất đến câu hỏi
-        2. Ghép thành câu trả lời mạch lạc
-        3. Thêm câu mở đầu kết luận
-        """
+        """Trích xuất câu trả lời từ context (không dùng generative model)."""
         question = context.original_question
         ctx_text = context.context_text
 
-        # Tách câu hỏi và phần context
         if "Câu hỏi:" in ctx_text:
             parts = ctx_text.split("\n\n", 1)
             if len(parts) == 2:
                 ctx_text = parts[1]
 
-        # Tìm các đoạn liên quan nhất
-        sentences = self._split_into_sentences(ctx_text)
+        sentences = split_into_sentences(ctx_text)
         if not sentences:
             return "Xin lỗi, không tìm thấy thông tin phù hợp để trả lời câu hỏi."
 
-        # Score sentences by relevance to question
-        scored = self._score_sentences(question, sentences)
+        scored = score_sentences(question, sentences)
         top_sentences = [s for s, _ in scored[:5]]
+        return build_answer_from_sentences(question, top_sentences)
 
-        # Build answer
-        answer = self._build_answer_from_sentences(question, top_sentences)
-        return answer
-
-    def _generate_generative(
-        self,
-        context: AugmentedContext,
-        max_length: int = 512,
-    ) -> str:
-        """Dùng PhoBERT để sinh câu trả lời (paraphrase/tóm tắt)."""
-        self._load_model()
-        if not self._loaded:
-            return self._generate_extractive(context)
-
-        # Tạo prompt: question + context
+    def _generate_llm(self, context: AugmentedContext, max_length: int) -> str:
+        """Generate answer via LLM client (Ollama-compatible API)."""
         prompt = self._build_prompt(context)
-
+        system = (
+            "Bạn là chuyên gia pháp lý Việt Nam. Hãy phân tích câu hỏi và trả lời dựa trên thông tin được cung cấp.\n"
+            "Cấu trúc câu trả lời phải có các phần:\n"
+            "**Căn cứ pháp lý:**\n"
+            "**Phân tích:**\n"
+            "**Kết luận:**\n"
+            "**Khuyến nghị:**"
+        )
         try:
-            inputs = self.tokenizer(
+            return self.llm_client.complete(
                 prompt,
-                max_length=MAX_SEQ_LENGTH,
-                truncation=True,
-                return_tensors="pt",
+                system=system,
+                max_tokens=max_length,
+                temperature=0.1,
             )
-            inputs = {k: v.to(self.device) for k, v in inputs.items()}
-
-            with torch.no_grad():
-                outputs = self.model(**inputs)
-                # Dùng hidden states để tạo summary (simplified)
-                # Trong thực tế cần seq2seq model hoặc GPT-style model
-
-            # Fallback về extractive vì PhoBERT không phải generative model
-            return self._generate_extractive(context)
-
-        except Exception:
+        except Exception as exc:
+            logger.error("LLM generation failed: %s", exc)
             return self._generate_extractive(context)
 
     def _build_prompt(self, context: AugmentedContext) -> str:
@@ -169,70 +121,6 @@ class LegalAnswerGenerator:
             f"Câu trả lời:"
         )
         return prompt
-
-    def _split_into_sentences(self, text: str) -> list[str]:
-        """Tách văn bản thành câu."""
-        import re
-        sentences = re.split(r'(?<=[.!?])\s+', text)
-        return [s.strip() for s in sentences if len(s.strip()) > 10]
-
-    def _score_sentences(
-        self,
-        question: str,
-        sentences: list[str],
-    ) -> list[tuple[str, float]]:
-        """Score sentences by word overlap với question."""
-        q_words = set(question.lower().split())
-        scored = []
-        for sent in sentences:
-            s_words = set(sent.lower().split())
-            overlap = len(q_words & s_words)
-            score = overlap / max(len(q_words), 1)
-            scored.append((sent, score))
-        scored.sort(key=lambda x: x[1], reverse=True)
-        return scored
-
-    def _build_answer_from_sentences(
-        self,
-        question: str,
-        sentences: list[str],
-    ) -> str:
-        """Ghép các câu thành câu trả lời hoàn chỉnh."""
-        if not sentences:
-            return "Không tìm thấy thông tin phù hợp."
-
-        # Xác định loại câu hỏi để định dạng câu trả lời
-        question_lower = question.lower()
-
-        if any(w in question_lower for w in ["có hiệu lực", "hết hiệu lực", "còn hiệu lực"]):
-            intro = "Theo các quy định pháp luật liên quan:"
-        elif any(w in question_lower for w in ["định nghĩa", "là gì", "khái niệm"]):
-            intro = "Theo quy định của pháp luật:"
-        elif any(w in question_lower for w in ["hình phạt", "xử phạt", "chế tài"]):
-            intro = "Về chế tài xử phạt, pháp luật quy định:"
-        elif any(w in question_lower for w in ["thủ tục", "quy trình", "làm thế nào"]):
-            intro = "Về thủ tục thực hiện:"
-        else:
-            intro = "Theo quy định của pháp luật:"
-
-        # Ghép các câu, loại bỏ trùng lặp
-        unique_sentences = []
-        seen = set()
-        for sent in sentences:
-            normalized = re.sub(r'\s+', ' ', sent.lower().strip())
-            if normalized not in seen and len(sent) > 20:
-                unique_sentences.append(sent)
-                seen.add(normalized)
-
-        if not unique_sentences:
-            return "Không tìm thấy thông tin đầy đủ để trả lời câu hỏi."
-
-        answer = intro + "\n\n"
-        for i, sent in enumerate(unique_sentences[:5], 1):
-            answer += f"{i}. {sent}\n"
-
-        answer += "\nLưu ý: Thông tin trên dựa trên các văn bản pháp luật hiện hành."
-        return answer.strip()
 
     def _extract_citations(self, context: AugmentedContext) -> list[Citation]:
         """Trích xuất citations từ documents."""
@@ -256,11 +144,16 @@ class LegalAnswerGenerator:
         for i, doc in enumerate(context.documents[:3], 3):
             doc_name = doc.metadata.get("name", doc.metadata.get("title", f"Tài liệu {i-2}"))
             steps.append(f"{i}. Tham khảo: {doc_name} (score: {doc.score:.3f})")
-        steps.append(f"{len(steps)+1}. Tổng hợp và sinh câu trả lời")
+        if self.generation_mode == "llm":
+            steps.append(f"{len(steps)+1}. Sử dụng LLM để tổng hợp và sinh câu trả lời")
+        else:
+            steps.append(f"{len(steps)+1}. Tổng hợp và sinh câu trả lời")
         return steps
 
     def _compute_confidence(self, context: AugmentedContext) -> float:
         """Tính confidence score dựa trên retrieval scores."""
+        if self.generation_mode == "llm":
+            return 0.85
         if not context.documents:
             return 0.0
         scores = [d.score for d in context.documents[:3]]
