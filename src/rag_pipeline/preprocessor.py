@@ -206,13 +206,17 @@ class LoRAPreprocessor:
 
     @staticmethod
     def _build_filters(entities: list[ExtractedEntity]) -> dict:
-        """Build metadata filters từ entities."""
+        """Build metadata filters từ entities.
+
+        Lưu ý: vector_store lưu document_type bằng tiếng Việt (luat, nghi_dinh, thong_tu)
+        nên filter phải khớp với giá trị đó thay vì tiếng Anh.
+        """
         filters = {}
         for ent in entities:
             if ent.label == "LUAT":
-                filters["doc_type"] = "law"
+                filters["doc_type"] = "luat"
             elif ent.label == "NGHI_DINH":
-                filters["doc_type"] = "decree"
+                filters["doc_type"] = "nghi_dinh"
             elif ent.label == "THONG_TU":
-                filters["doc_type"] = "circular"
+                filters["doc_type"] = "thong_tu"
         return filters

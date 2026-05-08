@@ -90,7 +90,7 @@ class LegalRetriever:
             except Exception as exc:
                 logger.warning("HybridSearch failed: %s", exc)
 
-        # Fallback: BM25 (+ optional local vector rerank)
+        # Fallback 1: BM25 (+ optional local vector rerank)
         if not results and self.search_engine is not None:
             for eq in expanded_queries:
                 results.extend(self._search_bm25(eq, top_k, filters))
@@ -113,8 +113,20 @@ class LegalRetriever:
                 except Exception as exc:
                     logger.warning("Vector search failed: %s", exc)
 
-        if not results and not self.search_engine:
+        # Fallback 2: pure vector search when no BM25 engine
+        if not results and self.search_engine is None and self.use_vector and self.vector_store and self.vector_store.is_available:
+            try:
+                vec_results = self.vector_store.search(query_text, n_results=top_k * 2)
+                results = convert_vector_results(vec_results)
+            except Exception as exc:
+                logger.warning("Vector search failed: %s", exc)
+
+        if not results and self.search_engine is None and not (self.vector_store and self.vector_store.is_available):
             logger.warning("No search engine available for retrieval")
+
+        # Apply filters after all retrieval paths
+        if filters:
+            results = self._apply_filters(results, filters)
 
         if filters:
             results = self._apply_filters(results, filters)
