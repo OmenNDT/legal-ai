@@ -187,6 +187,11 @@ RAGPipelineResponse
 - `POST /rag/generate` — Answer generation (LLM or extractive)
 - `POST /rag/pipeline` — Full 2→3→4 pipeline
 
+**Runtime Requirements**:
+- **Ollama**: model `qwen2.5:7b` (or any OpenAI-compatible local model) at `http://localhost:11434/v1`
+- **ChromaDB**: server `>=1.5.0` (v2 API) at `http://localhost:8001`
+- **VectorStore** auto-fallback to BM25-only when ChromaDB is unreachable
+
 ## Data Pipeline
 
 ### Core Pipeline

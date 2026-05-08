@@ -18,6 +18,10 @@
 
 ### Fixed
 - **[MAJOR]** `best_model.pt` path corrected: moved from repo root to `data/models/lora_ke_toan/best_model.pt`.
+- **[MINOR]** `.env` — switched LLM model from `qwen3.5:397b-cloud` to `qwen2.5:7b` (local Ollama) and updated `LLM_BASE_URL` / `CHROMA_HOST` to `localhost`.
+- **[MINOR]** `requirements.txt` — bumped `chromadb>=1.5.0` for v2 API compatibility.
+- **[MINOR]** `src/rag_pipeline/preprocessor.py` — `_build_filters()` now emits Vietnamese `doc_type` values (`luat`, `nghi_dinh`, `thong_tu`) to match ChromaDB metadata, fixing empty retrieval when NER inferred document type.
+- **[MINOR]** `src/rag_pipeline/retrieval.py` — added pure vector search fallback when BM25 engine is unavailable; moved `_apply_filters()` after all retrieval paths.
 
 ### Removed
 - **[MINOR]** `test_rag_pipeline.py` (root) — replaced by proper `tests/` pytest suite.

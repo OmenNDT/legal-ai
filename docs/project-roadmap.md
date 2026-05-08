@@ -107,6 +107,7 @@
 | LLM Generation | Complete | `LegalAnswerGenerator` `"llm"` mode, `LLMClient` (Ollama-compatible), structured Vietnamese output |
 | Query Expansion | Complete | `LEGAL_SYNONYMS`, `DOMAIN_MAP`, integrated into retriever |
 | Pytest Suite | Complete | `tests/test_rag_pipeline.py` with 16 passing tests |
+| End-to-end Pipeline | Complete | Full flow verified with `qwen2.5:7b` (Ollama) + ChromaDB v2; `doc_type` filter aligned with metadata |
 
 ## Key Risks
 
