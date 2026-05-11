@@ -4,7 +4,7 @@
 
 - **Đề tài**: Dự đoán độ trễ giao hàng (Trip Delay Hours Prediction) trong vận tải đường bộ
 - **Bài toán**: Regression
-- **Sinh viên**: Trần Tín Nghĩa
+- **Sinh viên**: Trần Tín Nghĩa - Hồ Thị Mỹ Phương - Trương Ngọc Sơn
 - **Trường**: UIT - Đại học Công nghệ Thông tin
 - **Môn**: Máy học
 - **Năm học**: 2025-2026
