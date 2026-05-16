@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.rag_pipeline import (
+from backend.rag_pipeline import (
     MockPreprocessor,
     MockPostprocessor,
     LegalRetriever,
@@ -11,7 +11,7 @@ from src.rag_pipeline import (
     RAGPipeline,
     RAGPipelineRequest,
 )
-from src.rag_pipeline.contracts import (
+from backend.rag_pipeline.contracts import (
     GeneratedAnswer,
     Citation,
     RetrievedDocument,
@@ -80,7 +80,7 @@ class TestLegalRetriever:
             assert all(d.rank >= 1 for d in result.documents)
 
     def test_retrieve_with_expansion(self, mock_search_engine, sample_processed_question):
-        from src.rag_pipeline.query_expansion import expand_query
+        from backend.rag_pipeline.query_expansion import expand_query
         expanded = expand_query(sample_processed_question.raw_text, sample_processed_question.entities)
         assert len(expanded) >= 1
         assert sample_processed_question.raw_text in expanded
@@ -169,15 +169,15 @@ class TestRAGPipeline:
 
 class TestQueryExpansion:
     def test_expand_query_basic(self):
-        from src.rag_pipeline.query_expansion import expand_query
-        from src.rag_pipeline.contracts import ExtractedEntity
+        from backend.rag_pipeline.query_expansion import expand_query
+        from backend.rag_pipeline.contracts import ExtractedEntity
         entities = [ExtractedEntity(text="Luật Kế toán 2015", label="LUAT", start=0, end=18)]
         result = expand_query("phạt tù là gì?", entities)
         assert len(result) >= 1
         assert "phạt tù là gì?" in result
 
     def test_detect_domain(self):
-        from src.rag_pipeline.query_expansion import detect_domain
+        from backend.rag_pipeline.query_expansion import detect_domain
         assert detect_domain("hợp đồng lao động") == "lao_dong"
         assert detect_domain("thuế doanh nghiệp") == "thuong_mai"
         assert detect_domain("abc xyz") == "general"

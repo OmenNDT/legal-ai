@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.rag_pipeline.contracts import (
+from backend.rag_pipeline.contracts import (
     ExtractedEntity,
     RetrievedDocument,
     RetrievalResult,
