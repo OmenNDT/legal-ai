@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { Input, Select, Button, Slider, Card, Tag, Typography, Switch, Tooltip, Segmented, Upload, message, Checkbox } from 'antd';
 import { Play, Pause, RotateCcw, SkipForward, SkipBack, ChevronsRight, Cpu, Zap, Search, Activity, Upload as UploadIcon, Download } from 'lucide-react';
-import { ALGORITHMS, naiveSearch, kmpSearch, boyerMooreSearch } from '../services/stringMatching';
+import { ALGORITHMS, runStringMatching } from '../services/stringMatching';
 import { api } from '../services/api';
 
 const { TextArea } = Input;
@@ -33,18 +33,12 @@ const TabStringMatching = () => {
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(300); // ms per step
   const [exporting, setExporting] = useState(false);
+  const [running, setRunning] = useState(false);
   const timerRef = useRef(null);
 
-  const ALGO_FNS = { naive: naiveSearch, kmp: kmpSearch, boyer_moore: boyerMooreSearch };
   const ALGO_SHORT = { naive: 'Naïve', kmp: 'KMP', boyer_moore: 'BM' };
 
-  const measure = (fn) => {
-    const t0 = performance.now();
-    const out = fn();
-    return { ...out, elapsedMs: performance.now() - t0 };
-  };
-
-  const runAll = () => {
+  const runAll = async () => {
     if (!pattern || pattern.length === 0) {
       message.warning('Vui lòng nhập pattern.');
       return;
@@ -53,14 +47,17 @@ const TabStringMatching = () => {
       message.warning('Chọn ít nhất một thuật toán.');
       return;
     }
-    const opts = { caseSensitive };
-    const out = {};
-    for (const key of selected) {
-      out[key] = measure(() => ALGO_FNS[key](text, pattern, opts));
+    try {
+      setRunning(true);
+      const out = await runStringMatching(text, pattern, selected, { caseSensitive, trace: true });
+      setResults(out);
+      setStepIndex(0);
+      setPlaying(false);
+    } catch (e) {
+      message.error('Chạy thuật toán thất bại: ' + (e?.response?.data?.error || e.message));
+    } finally {
+      setRunning(false);
     }
-    setResults(out);
-    setStepIndex(0);
-    setPlaying(false);
   };
 
   const formatMs = (ms) => {

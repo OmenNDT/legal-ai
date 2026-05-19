@@ -1,13 +1,15 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import List
+from typing import Any, Dict, List
 
 @dataclass
 class MatchResult:
     pattern: str
     text_length: int
-    positions: List[int] = field(default_factory=list)
+    positions: List[int] = field(default_factory = list)
     comparisons: int = 0
+    steps: List[Dict[str, Any]] = field(default_factory = list)
+    extras: Dict[str, Any] = field(default_factory = dict)
 
     @property
     def count(self) -> int:
@@ -16,6 +18,16 @@ class MatchResult:
     @property
     def found(self) -> bool:
         return self.count > 0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "pattern": self.pattern,
+            "text_length": self.text_length,
+            "positions": list(self.positions),
+            "comparisons": self.comparisons,
+            "steps": self.steps,
+            **self.extras
+        }
 
     def __str__(self) -> str:
         return (
@@ -32,7 +44,7 @@ class StringMatcher(ABC):
         return s if self.case_sensitive else s.lower()
 
     @abstractmethod
-    def search(self, text: str, pattern: str) -> MatchResult:
+    def search(self, text: str, pattern: str, trace: bool = False) -> MatchResult:
         ...
 
     def search_first(self, text: str, pattern: str) -> int:

@@ -295,9 +295,9 @@ def rag_augment():
     processed = my_rag_pipeline.preprocessor.process(body.get("question", ""))
 
     retrieval_result = my_rag_pipeline.retriever.retrieve(
-        question=processed,
-        top_k=body.get("top_k", 10),
-        filters=processed.filters,
+        question = processed,
+        top_k = body.get("top_k", 10),
+        filters = processed.filters
     )
 
     if reasoner is not None:
@@ -305,13 +305,13 @@ def rag_augment():
             question=body.get("question", ""),
             retrieval_result=retrieval_result,
             reasoner=reasoner,
-            top_k=body.get("top_k_rerank", 5),
+            top_k=body.get("top_k_rerank", 5)
         )
     else:
         augmented = my_rag_pipeline.augmenter.augment(
             question=body.get("question", ""),
             retrieval_result=retrieval_result,
-            top_k=body.get("top_k_rerank", 5),
+            top_k=body.get("top_k_rerank", 5)
         )
 
     return jsonify({
@@ -320,7 +320,7 @@ def rag_augment():
         "documents_used": len(augmented.documents),
         "token_count": augmented.token_count,
         "strategy": augmented.context_strategy,
-        "rerank_scores": augmented.rerank_scores,
+        "rerank_scores": augmented.rerank_scores
     })
 
 
@@ -332,9 +332,9 @@ def rag_generate():
         return jsonify({"error": "My RAG Pipeline not initialized."})
 
     req = RAGPipelineRequest(
-        question=body.get("question", ""),
-        top_k_retrieval=body.get("top_k", 10),
-        top_k_rerank=body.get("top_k_rerank", 5),
+        question = body.get("question", ""),
+        top_k_retrieval = body.get("top_k", 10),
+        top_k_rerank = body.get("top_k_rerank", 5),
     )
     response = my_rag_pipeline.run(req)
 
@@ -351,7 +351,7 @@ def rag_generate():
             for s in response.sources
         ],
         "reasoning": response.reasoning,
-        "latency_ms": response.latency_ms,
+        "latency_ms": response.latency_ms
     })
 
 
@@ -363,12 +363,12 @@ def rag_pipeline_endpoint():
         return jsonify({"error": "My RAG Pipeline not initialized."})
 
     req = RAGPipelineRequest(
-        question=body.get("question", ""),
-        top_k_retrieval=body.get("top_k_retrieval", 10),
-        top_k_rerank=body.get("top_k_rerank", 5),
-        max_context_tokens=body.get("max_context_tokens", 1024),
-        use_reranker=body.get("use_reranker", True),
-        return_sources=body.get("return_sources", True),
+        question = body.get("question", ""),
+        top_k_retrieval = body.get("top_k_retrieval", 10),
+        top_k_rerank = body.get("top_k_rerank", 5),
+        max_context_tokens = body.get("max_context_tokens", 1024),
+        use_reranker = body.get("use_reranker", True),
+        return_sources = body.get("return_sources", True)
     )
     response = my_rag_pipeline.run(req)
 
@@ -390,8 +390,48 @@ def rag_pipeline_endpoint():
             "total_found": response.retrieval_info.total_found,
             "latency_ms": response.retrieval_info.latency_ms,
         },
-        "latency_ms": response.latency_ms,
+        "latency_ms": response.latency_ms
     })
+
+
+def _run_matcher(matcher_cls, algo_key):
+    import time
+    payload = request.get_json(silent = True) or {}
+    text = payload.get("text", "") or ""
+    pattern = payload.get("pattern", "") or ""
+    case_sensitive = bool(payload.get("case_sensitive", False))
+    trace = bool(payload.get("trace", True))
+
+    if not pattern:
+        return jsonify({"error": "Pattern must not be empty."}), 400
+
+    matcher = matcher_cls(case_sensitive=case_sensitive)
+    t0 = time.perf_counter()
+    res = matcher.search(text, pattern, trace=trace)
+    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+
+    d = res.to_dict()
+    d["algorithm"] = algo_key
+    d["elapsed_ms"] = elapsed_ms
+    return jsonify({"ok": True, "result": d})
+
+
+@app.post("/api/string-matching/naive")
+def string_matching_naive():
+    from backend.string_matching.naive.naive_matcher import NaiveMatcher
+    return _run_matcher(NaiveMatcher, "naive")
+
+
+@app.post("/api/string-matching/kmp")
+def string_matching_kmp():
+    from backend.string_matching.kmp.kmp_matcher import KMPMatcher
+    return _run_matcher(KMPMatcher, "kmp")
+
+
+@app.post("/api/string-matching/boyer-moore")
+def string_matching_boyer_moore():
+    from backend.string_matching.boyer_moore.boyer_moore_matcher import BoyerMooreMatcher
+    return _run_matcher(BoyerMooreMatcher, "boyer_moore")
 
 
 @app.post("/api/string-matching/export")
@@ -457,7 +497,7 @@ def health():
             "pipeline": rag_pipeline is not None,
             "my_rag_pipeline": my_rag_pipeline is not None,
             "search": search_engine is not None,
-            "knowledge_graph": kg is not None,
+            "knowledge_graph": kg is not None
         },
     })
 
@@ -474,4 +514,4 @@ if APP_PREFIX and APP_PREFIX != "/":
 
 if __name__ == "__main__":
     _startup()
-    app.run(host="0.0.0.0", port=9010, debug=True)
+    app.run(host = "0.0.0.0", port = 9010, debug = True)
