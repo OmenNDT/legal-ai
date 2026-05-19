@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Start Flask backend then open frontend in browser
 cd "$(dirname "$0")/backend"
-echo "Starting Flask on http://localhost:5050 ..."
+HOST_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+echo "Starting Flask on http://0.0.0.0:5050"
+echo "  - Local:   http://localhost:5050"
+[ -n "$HOST_IP" ] && echo "  - Network: http://$HOST_IP:5050"
 python app.py

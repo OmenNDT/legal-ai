@@ -2,8 +2,10 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
+
+FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
 from backend.common.config import (
     SEARCH_INDEX_PATH, KG_PATH,
@@ -24,8 +26,29 @@ from backend.rag_pipeline import (
     MockPreprocessor,
 )
 
-app = Flask(__name__)
+app = Flask(
+    __name__,
+    static_folder=str(FRONTEND_DIST) if FRONTEND_DIST.exists() else None,
+    static_url_path="",
+)
 CORS(app)
+
+
+@app.get("/")
+def _serve_index():
+    if not FRONTEND_DIST.exists():
+        return jsonify({"error": "Frontend not built. Run `npm run build` in frontend/."}), 503
+    return send_from_directory(str(FRONTEND_DIST), "index.html")
+
+
+@app.get("/<path:filename>")
+def _serve_static(filename: str):
+    if not FRONTEND_DIST.exists():
+        return jsonify({"error": "Frontend not built."}), 503
+    target = FRONTEND_DIST / filename
+    if target.is_file():
+        return send_from_directory(str(FRONTEND_DIST), filename)
+    return send_from_directory(str(FRONTEND_DIST), "index.html")
 
 from backend.auth import auth_bp
 from backend.auth.db import init_pool as init_auth_pool
@@ -371,6 +394,61 @@ def rag_pipeline_endpoint():
     })
 
 
+@app.post("/api/string-matching/export")
+def string_matching_export():
+    from datetime import datetime
+    import re as _re
+
+    payload = request.get_json(silent=True) or {}
+    text = payload.get("text", "") or ""
+    pattern = payload.get("pattern", "") or ""
+    case_sensitive = bool(payload.get("case_sensitive", False))
+    positions = payload.get("positions") or []
+    occurrences = payload.get("occurrences")
+    if occurrences is None:
+        occurrences = len(positions)
+    complexities = payload.get("complexities") or {}  # {naive, kmp, boyer_moore} -> worst-case Big-O string
+    comparisons = payload.get("comparisons") or {}  # same keys -> int
+
+    short_names = [("naive", "Naïve"), ("kmp", "KMP"), ("boyer_moore", "BM")]
+    selected_keys = [k for k, _ in short_names if k in complexities or k in comparisons]
+
+    lines = []
+    selected_label = ", ".join(label for k, label in short_names if k in selected_keys) or "—"
+    lines.append(f"Tìm kiếm văn bản: Quan sát {selected_label}, tìm pattern trong text.")
+    lines.append("")
+    lines.append("Text (chuỗi nguồn):")
+    lines.append(text)
+    lines.append("")
+    lines.append("Pattern (chuỗi cần tìm):")
+    lines.append(pattern)
+    lines.append("")
+    lines.append(f"Case-sensitive (Y/N): {'Y' if case_sensitive else 'N'}")
+    lines.append("")
+    lines.append("Kết quả:")
+    lines.append(f"- Vị trí tìm thấy: {', '.join(str(p) for p in positions) if positions else '—'}")
+    lines.append(f"- Số lần xuất hiện: {occurrences}")
+    lines.append("- Độ phức tạp (worst case):")
+    for k, label in short_names:
+        if k in selected_keys:
+            lines.append(f"\t+ {label}: {complexities.get(k, '—')}")
+    lines.append("- Số phép so sánh:")
+    for k, label in short_names:
+        if k in selected_keys:
+            lines.append(f"\t+ {label}: {comparisons.get(k, '—')}")
+    content = "\n".join(lines) + "\n"
+
+    out_dir = Path(__file__).resolve().parent / "string_matching" / "result"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_pattern = _re.sub(r"[^a-zA-Z0-9_-]+", "_", pattern.strip())[:30] or "pattern"
+    filename = f"result_{ts}_{safe_pattern}.txt"
+    out_path = out_dir / filename
+    out_path.write_text(content, encoding="utf-8")
+
+    return jsonify({"ok": True, "filename": filename, "path": str(out_path), "content": content})
+
+
 @app.get("/health")
 def health():
     return jsonify({
@@ -383,6 +461,17 @@ def health():
         },
     })
 
+APP_PREFIX = os.environ.get("APP_PREFIX", "/legal-ai")
+
+if APP_PREFIX and APP_PREFIX != "/":
+    from werkzeug.middleware.dispatcher import DispatcherMiddleware
+    from werkzeug.wrappers import Response
+
+    def _redirect_root(environ, start_response):
+        return Response("", status=302, headers={"Location": APP_PREFIX + "/"})(environ, start_response)
+
+    app.wsgi_app = DispatcherMiddleware(_redirect_root, {APP_PREFIX: app.wsgi_app})
+
 if __name__ == "__main__":
     _startup()
-    app.run(host = "0.0.0.0", port = 9010, debug = True)
+    app.run(host="0.0.0.0", port=9010, debug=True)

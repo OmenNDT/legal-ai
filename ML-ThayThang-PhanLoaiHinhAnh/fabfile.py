@@ -2,7 +2,7 @@ import subprocess
 from fabric import Connection, task
 
 REMOTE = "sontn@100.81.215.111"
-REMOTE_DIR = "~/ML-ThayThang2"
+REMOTE_DIR = "~/ML-ThayThang-PhanLoaiHinhAnh"
 
 @task
 def run(c):

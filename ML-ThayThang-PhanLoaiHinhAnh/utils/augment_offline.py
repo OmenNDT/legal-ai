@@ -117,4 +117,3 @@ if __name__ == "__main__":
     cfg = AugmentConfig()
     pipeline = OfflineAugmentationPipeline(dm.train_paths_by_class, cfg)
     pipeline.run()
-    dm.setup_after_augment()

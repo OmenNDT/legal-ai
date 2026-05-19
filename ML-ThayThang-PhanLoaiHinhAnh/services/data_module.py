@@ -33,7 +33,7 @@ class SolarPanelDataModule:
     def setup(self) -> "SolarPanelDataModule":
         logger.info("--- setup() START ---")
 
-        eval_ds  = self._load_originals(self.tf.eval)
+        eval_ds = self._load_originals(self.tf.eval)
         train_ds = self._load_originals(self.tf.train)
         logger.info("Total original images: %d | Classes: %s", len(eval_ds), eval_ds.classes)
 
@@ -44,8 +44,8 @@ class SolarPanelDataModule:
         self.train_paths_by_class = self._collect_train_paths(eval_ds, train_idx)
 
         self.train_dataset = Subset(train_ds, list(train_idx))
-        self.val_dataset   = Subset(eval_ds,  list(val_idx))
-        self.test_dataset  = Subset(eval_ds,  list(test_idx))
+        self.val_dataset = Subset(eval_ds, list(val_idx))
+        self.test_dataset = Subset(eval_ds, list(test_idx))
 
         self._print_stats(len(train_idx), len(val_idx), len(test_idx))
         logger.info("--- setup() DONE ---")

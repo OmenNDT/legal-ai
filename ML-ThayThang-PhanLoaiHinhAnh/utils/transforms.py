@@ -55,8 +55,8 @@ class SolarTransforms:
         sz = img_size
         return [
             transforms.Compose([transforms.Resize((sz, sz)), transforms.ToTensor(), transforms.Normalize(mean = cls.MEAN, std = cls.STD)]),
-            transforms.Compose([transforms.Resize((sz, sz)), transforms.RandomHorizontalFlip(p=1.0), transforms.ToTensor(), transforms.Normalize(mean = cls.MEAN, std = cls.STD)]),
+            transforms.Compose([transforms.Resize((sz, sz)), transforms.RandomHorizontalFlip(p = 1.0), transforms.ToTensor(), transforms.Normalize(mean = cls.MEAN, std = cls.STD)]),
             transforms.Compose([transforms.Resize((sz + 32, sz + 32)), transforms.CenterCrop(sz), transforms.ToTensor(), transforms.Normalize(mean = cls.MEAN, std = cls.STD)]),
-            transforms.Compose([transforms.Resize((sz, sz)), transforms.ColorJitter(brightness=0.2, contrast=0.2), transforms.ToTensor(), transforms.Normalize(mean = cls.MEAN, std = cls.STD)]),
+            transforms.Compose([transforms.Resize((sz, sz)), transforms.ColorJitter(brightness = 0.2, contrast = 0.2), transforms.ToTensor(), transforms.Normalize(mean = cls.MEAN, std = cls.STD)]),
             transforms.Compose([transforms.Resize((sz, sz)), transforms.RandomRotation(10), transforms.ToTensor(), transforms.Normalize(mean = cls.MEAN, std = cls.STD)])
         ]

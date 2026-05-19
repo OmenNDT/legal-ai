@@ -9,3 +9,6 @@ scikit-learn
 Pillow
 tqdm
 streamlit
+Flask
+fabric
+fab
