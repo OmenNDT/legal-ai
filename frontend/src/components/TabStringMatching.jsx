@@ -437,6 +437,12 @@ const AlgorithmPanel = ({ algoKey, result, text, pattern, stepIndex, isCompare, 
         {algoKey === 'boyer_moore' && step.badChar && (
           <BadCharTable badChar={step.badChar} />
         )}
+        {algoKey === 'boyer_moore' && step.goodSuffix && step.goodSuffix.length > 0 && (
+          <GoodSuffixTable pattern={pattern} goodSuffix={step.goodSuffix} highlight={step.type === 'shift' ? step.j : null} />
+        )}
+        {algoKey === 'boyer_moore' && step.type === 'shift' && step.bcShift != null && (
+          <ShiftCompare bcShift={step.bcShift} gsShift={step.gsShift ?? 0} shiftBy={step.shiftBy} />
+        )}
 
         {/* Mini progress bar */}
         {!isCompare && (
@@ -650,6 +656,98 @@ const BadCharTable = ({ badChar }) => {
             </div>
           </Tooltip>
         ))}
+      </div>
+    </div>
+  );
+};
+
+const GoodSuffixTable = ({ pattern, goodSuffix, highlight }) => (
+  <div className="mt-4">
+    <div className="text-[10px] uppercase tracking-widest font-semibold mb-1.5" style={{ color: COLORS.muted }}>
+      Bảng Good-Suffix (shift khi mismatch tại j)
+    </div>
+    <div className="overflow-x-auto rounded-lg" style={{ background: '#faf6f2' }}>
+      <table className="font-mono text-xs w-full">
+        <tbody>
+          <tr>
+            <td className="px-2 py-1 font-semibold" style={{ color: COLORS.muted, width: 50 }}>j</td>
+            {goodSuffix.map((_, i) => (
+              <td key={i} className="px-2 py-1 text-center" style={{ color: COLORS.muted }}>{i}</td>
+            ))}
+          </tr>
+          <tr>
+            <td className="px-2 py-1 font-semibold" style={{ color: COLORS.dark }}>p</td>
+            {pattern.split('').map((ch, i) => (
+              <td key={i} className="px-2 py-1 text-center font-semibold" style={{ color: COLORS.wineDeep }}>{ch === ' ' ? '␣' : ch}</td>
+            ))}
+          </tr>
+          <tr>
+            <td className="px-2 py-1 font-semibold" style={{ color: COLORS.dark }}>gs</td>
+            {goodSuffix.map((v, i) => (
+              <td
+                key={i}
+                className="px-2 py-1 text-center font-bold transition-all"
+                style={{
+                  background: i === highlight ? COLORS.gold : 'transparent',
+                  color: i === highlight ? COLORS.wineDeep : COLORS.navy,
+                  borderRadius: 4,
+                }}
+              >
+                {v}
+              </td>
+            ))}
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+);
+
+const ShiftCompare = ({ bcShift, gsShift, shiftBy }) => {
+  const bcWins = bcShift >= gsShift;
+  return (
+    <div className="mt-4">
+      <div className="text-[10px] uppercase tracking-widest font-semibold mb-1.5" style={{ color: COLORS.muted }}>
+        So sánh Shift (lấy MAX)
+      </div>
+      <div className="flex gap-2">
+        <div
+          className="flex-1 px-3 py-2 rounded-lg font-mono text-xs transition-all"
+          style={{
+            background: bcWins ? COLORS.gold : '#faf6f2',
+            border: `2px solid ${bcWins ? COLORS.goldDark : '#eee'}`,
+          }}
+        >
+          <div className="text-[10px] uppercase tracking-widest font-semibold" style={{ color: COLORS.muted }}>
+            Bad-character
+          </div>
+          <div className="text-lg font-bold" style={{ color: bcWins ? COLORS.wineDeep : COLORS.dark }}>
+            {bcShift}
+          </div>
+        </div>
+        <div
+          className="flex-1 px-3 py-2 rounded-lg font-mono text-xs transition-all"
+          style={{
+            background: !bcWins ? COLORS.gold : '#faf6f2',
+            border: `2px solid ${!bcWins ? COLORS.goldDark : '#eee'}`,
+          }}
+        >
+          <div className="text-[10px] uppercase tracking-widest font-semibold" style={{ color: COLORS.muted }}>
+            Good-suffix
+          </div>
+          <div className="text-lg font-bold" style={{ color: !bcWins ? COLORS.wineDeep : COLORS.dark }}>
+            {gsShift}
+          </div>
+        </div>
+        <div
+          className="flex-1 px-3 py-2 rounded-lg font-mono text-xs"
+          style={{ background: COLORS.wine, color: 'white' }}
+        >
+          <div className="text-[10px] uppercase tracking-widest font-semibold" style={{ color: 'rgba(255,255,255,0.7)' }}>
+            Trượt thực tế
+          </div>
+          <div className="text-lg font-bold">{shiftBy ?? Math.max(bcShift, gsShift)}</div>
+        </div>
       </div>
     </div>
   );
