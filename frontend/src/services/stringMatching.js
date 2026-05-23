@@ -20,6 +20,7 @@ const normalize = (r) => ({
   elapsedMs: r.elapsed_ms ?? null,
   lps: r.lps,
   badChar: r.badChar,
+  goodSuffix: r.goodSuffix,
 });
 
 export async function runOne(algoKey, text, pattern, { caseSensitive = false, trace = true } = {}) {
