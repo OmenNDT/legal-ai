@@ -75,6 +75,8 @@ class TrainingPipeline:
                 base_lr = Config.LLRD_BASE_LR,
                 decay_factor = Config.LLRD_DECAY
             )
+            for k in trainer.history:
+                trainer.history[k].extend(adv_trainer.history[k])
         else:
             trainer.train(
                 num_epochs = Config.NUM_EPOCHS_PHASE2,

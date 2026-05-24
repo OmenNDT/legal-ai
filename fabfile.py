@@ -8,7 +8,7 @@ REMOTE_DIR = "~/ML-ThayThang-PhanLoaiHinhAnh"
 def run(c):
     subprocess.run(
         f"rsync -avz --exclude '__pycache__' . {REMOTE}:{REMOTE_DIR}/",
-        shell=True, check=True
+        shell = True, check = True
     )
     Connection(REMOTE).run(f"cd {REMOTE_DIR} && python3 main.py")
     subprocess.run(

@@ -1,4 +1,6 @@
 import copy
+import json
+import os
 import time
 import numpy as np
 import torch
@@ -6,6 +8,9 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.optim import lr_scheduler
 from tqdm import tqdm
+import matplotlib
+if not os.environ.get("DISPLAY"):
+    matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from config.GetPath import paths
 from utils.config import Config
@@ -105,6 +110,10 @@ class Trainer:
         path = self.models_dir / f"{self.model_name}{suffix}_best.pt"
         torch.save(self.model.state_dict(), path)
         print(f"Saved -> {path}")
+        history_path = self.models_dir / f"{self.model_name}{suffix}_history.json"
+        with open(history_path, "w") as f:
+            json.dump(self.history, f)
+        print(f"Saved -> {history_path}")
         return str(path)
 
     def plot_history(self) -> None:
@@ -118,7 +127,10 @@ class Trainer:
             ax.legend()
             ax.grid(alpha = 0.3)
         plt.tight_layout()
-        plt.show()
+        out_path = self.models_dir / f"{self.model_name}_history.png"
+        plt.savefig(out_path, dpi = 120, bbox_inches = "tight")
+        plt.close()
+        print(f"Saved -> {out_path}")
 
 class AdvancedTrainer(Trainer):
 

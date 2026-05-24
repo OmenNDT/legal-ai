@@ -5,11 +5,13 @@ from sklearn.model_selection import train_test_split
 import logging
 
 from config.GetPath import paths
+from utils.config import Config
 from utils.transforms import SolarTransforms
 
 logger = logging.getLogger(__name__)
 
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
+ALLOWED_CLASSES = set(Config.CLASS_NAMES)
 
 class SolarPanelDataModule:
 
@@ -64,7 +66,14 @@ class SolarPanelDataModule:
         return loaders
 
     def _load_originals(self, transform) -> datasets.ImageFolder:
-        return datasets.ImageFolder(
+        class FilteredImageFolder(datasets.ImageFolder):
+            def find_classes(self, directory: str):  # type: ignore[override]
+                classes = sorted(d.name for d in Path(directory).iterdir() if d.is_dir() and d.name in ALLOWED_CLASSES)
+                if not classes:
+                    raise FileNotFoundError(f"No allowed class dirs found under {directory}")
+                class_to_idx = {cls: i for i, cls in enumerate(classes)}
+                return classes, class_to_idx
+        return FilteredImageFolder(
             str(self.data_dir),
             transform = transform,
             is_valid_file = lambda p: Path(p).suffix.lower() in IMG_EXTS

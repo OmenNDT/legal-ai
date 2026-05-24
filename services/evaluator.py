@@ -1,3 +1,4 @@
+import time
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, Subset
@@ -5,7 +6,7 @@ from torchvision import datasets
 from tqdm import tqdm
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score,
-    f1_score, classification_report
+    f1_score, classification_report, confusion_matrix, roc_auc_score
 )
 
 from config.GetPath import paths
@@ -38,6 +39,43 @@ class Evaluator:
             "recall": recall_score(y_true, y_pred, average = "macro", zero_division = 0),
             "f1": f1_score(y_true, y_pred, average = "macro", zero_division = 0)
         }
+
+    def full_report(self, y_true: np.ndarray, y_pred: np.ndarray, y_prob: np.ndarray) -> dict:
+        labels = list(range(len(self.class_names)))
+        cm = confusion_matrix(y_true, y_pred, labels = labels).tolist()
+        try:
+            auc = roc_auc_score(y_true, y_prob, multi_class = "ovr", average = "macro", labels = labels)
+        except ValueError:
+            auc = None
+        per_class_f1 = np.asarray(f1_score(y_true, y_pred, labels = labels, average = None, zero_division = 0)).tolist()
+        per_class_precision = np.asarray(precision_score(y_true, y_pred, labels = labels, average = None, zero_division = 0)).tolist()
+        per_class_recall = np.asarray(recall_score(y_true, y_pred, labels = labels, average = None, zero_division = 0)).tolist()
+        return {
+            **self.compute_metrics(y_true, y_pred),
+            "auc": float(auc) if auc is not None else None,
+            "confusion_matrix": cm,
+            "per_class_f1": per_class_f1,
+            "per_class_precision": per_class_precision,
+            "per_class_recall": per_class_recall,
+            "class_names": list(self.class_names),
+            "n_samples": int(len(y_true))
+        }
+
+    def benchmark_inference_ms(self, model: torch.nn.Module, img_size: int = 224, n_warmup: int = 5, n_runs: int = 30) -> float:
+        model.eval()
+        dummy = torch.randn(1, 3, img_size, img_size, device = self.device)
+        with torch.no_grad():
+            for _ in range(n_warmup):
+                model(dummy)
+            if self.device.type == "cuda":
+                torch.cuda.synchronize()
+            t0 = time.perf_counter()
+            for _ in range(n_runs):
+                model(dummy)
+            if self.device.type == "cuda":
+                torch.cuda.synchronize()
+            elapsed = time.perf_counter() - t0
+        return (elapsed / n_runs) * 1000.0
 
     def print_report(self, model_name: str, y_true: np.ndarray, y_pred: np.ndarray, split: str = "Val") -> dict:
         m = self.compute_metrics(y_true, y_pred)
