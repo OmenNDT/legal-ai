@@ -7,6 +7,7 @@ import logging
 from config.GetPath import paths
 from utils.config import Config
 from utils.transforms import SolarTransforms
+from services.safe_aug_dataset import SafeAugDataset, AugStats
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ class SolarPanelDataModule:
         logger.info("--- setup() START ---")
 
         eval_ds = self._load_originals(self.tf.eval)
-        train_ds = self._load_originals(self.tf.train)
+        raw_ds  = self._load_originals(transform=None)  # PIL only — fed to SafeAugDataset
         logger.info("Total original images: %d | Classes: %s", len(eval_ds), eval_ds.classes)
 
         train_idx, val_idx, test_idx = self._split(eval_ds.targets)
@@ -45,11 +46,19 @@ class SolarPanelDataModule:
         self.class_names = eval_ds.classes
         self.train_paths_by_class = self._collect_train_paths(eval_ds, train_idx)
 
-        self.train_dataset = Subset(train_ds, list(train_idx))
+        self.aug_stats = AugStats()
+        train_raw_subset = Subset(raw_ds, list(train_idx))
+        self.train_dataset = SafeAugDataset(
+            base_dataset = train_raw_subset,
+            img_size = self.img_size,
+            aug = self.tf.aug,
+            stats = self.aug_stats
+        )
         self.val_dataset = Subset(eval_ds, list(val_idx))
         self.test_dataset = Subset(eval_ds, list(test_idx))
 
         self._print_stats(len(train_idx), len(val_idx), len(test_idx))
+        logger.info("SafeAugDataset enabled | cosine threshold = %.2f", self.train_dataset.threshold)
         logger.info("--- setup() DONE ---")
         return self
 

@@ -9,8 +9,7 @@ import torch.optim as optim
 from torch.optim import lr_scheduler
 from tqdm import tqdm
 import matplotlib
-if not os.environ.get("DISPLAY"):
-    matplotlib.use("Agg")
+if not os.environ.get("DISPLAY"): matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from config.GetPath import paths
 from utils.config import Config

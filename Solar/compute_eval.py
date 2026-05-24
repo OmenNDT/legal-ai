@@ -10,6 +10,9 @@ import logging
 import sys
 from pathlib import Path
 
+from torch.utils.data import Subset
+from torchvision import datasets
+
 from config.GetPath import paths
 from utils.config import Config
 from services.data_module import SolarPanelDataModule
@@ -20,7 +23,6 @@ logging.basicConfig(level = logging.INFO, format = "%(asctime)s %(levelname)s %(
 log = logging.getLogger("compute_eval")
 
 MODELS = ["efficientnetb4", "resnet50", "vit"]
-
 
 def main() -> int:
     Config.seed_everything()
@@ -35,9 +37,10 @@ def main() -> int:
     loaders = dm.get_loaders(num_workers = 2)
     test_loader = loaders["test"]
 
-    test_subset = dm.test_dataset
-    assert test_subset is not None
+    assert isinstance(dm.test_dataset, Subset)
+    test_subset: Subset = dm.test_dataset
     base_ds = test_subset.dataset
+    assert isinstance(base_ds, datasets.ImageFolder)
     test_indices = list(test_subset.indices)
     file_paths = [str(Path(base_ds.samples[i][0]).resolve()) for i in test_indices]
 
@@ -60,7 +63,7 @@ def main() -> int:
             "[%s] acc=%.4f f1=%.4f auc=%s n=%d",
             model_name, report["accuracy"], report["f1"],
             f"{report['auc']:.4f}" if report["auc"] is not None else "N/A",
-            report["n_samples"],
+            report["n_samples"]
         )
 
         log.info("[%s] Benchmarking inference latency...", model_name)
@@ -89,7 +92,6 @@ def main() -> int:
 
     log.info("Done.")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())
