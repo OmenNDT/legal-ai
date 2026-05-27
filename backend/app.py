@@ -26,12 +26,40 @@ from backend.rag_pipeline import (
     MockPreprocessor,
 )
 
-app = Flask(
-    __name__,
-    static_folder=str(FRONTEND_DIST) if FRONTEND_DIST.exists() else None,
-    static_url_path="",
-)
+app = Flask(__name__)
 CORS(app)
+
+FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+from backend.auth import auth_bp
+from backend.auth.db import init_pool as init_auth_pool
+
+# RAG Extract (from BTMH RAG_Extract)
+from backend.rag_extract import rag_bp
+
+app.register_blueprint(auth_bp)
+app.register_blueprint(rag_bp)
+try:
+    init_auth_pool()
+    print("Auth DB pool initialized.")
+except Exception as exc:
+    print(f"Warning: Auth DB pool not initialized: {exc}")
+
+# Initialize RAG Extract database
+try:
+    from backend.rag_extract.database import init_db as init_rag_db
+    init_rag_db()
+    print("RAG Extract DB initialized.")
+except Exception as exc:
+    print(f"Warning: RAG Extract DB not initialized: {exc}")
+
+
+# ── before_request: skip catch-all for API routes ──
+@app.before_request
+def _before_request():
+    if request.path.startswith('/api/'):
+        # Let blueprint routes handle API; if none match, Flask will 404 naturally
+        pass
 
 
 @app.get("/")
@@ -49,16 +77,6 @@ def _serve_static(filename: str):
     if target.is_file():
         return send_from_directory(str(FRONTEND_DIST), filename)
     return send_from_directory(str(FRONTEND_DIST), "index.html")
-
-from backend.auth import auth_bp
-from backend.auth.db import init_pool as init_auth_pool
-
-app.register_blueprint(auth_bp)
-try:
-    init_auth_pool()
-    print("Auth DB pool initialized.")
-except Exception as exc:
-    print(f"Warning: Auth DB pool not initialized: {exc}")
 
 rag_pipeline: Optional[RAGPipeline] = None
 my_rag_pipeline: Optional[MyRAGPipeline] = None
@@ -507,10 +525,15 @@ if APP_PREFIX and APP_PREFIX != "/":
     from werkzeug.middleware.dispatcher import DispatcherMiddleware
     from werkzeug.wrappers import Response
 
+    _original_wsgi_app = app.wsgi_app
+
     def _redirect_root(environ, start_response):
+        path = environ.get('PATH_INFO', '')
+        if path.startswith('/api/'):
+            return _original_wsgi_app(environ, start_response)
         return Response("", status=302, headers={"Location": APP_PREFIX + "/"})(environ, start_response)
 
-    app.wsgi_app = DispatcherMiddleware(_redirect_root, {APP_PREFIX: app.wsgi_app})
+    app.wsgi_app = DispatcherMiddleware(_redirect_root, {APP_PREFIX: _original_wsgi_app})
 
 if __name__ == "__main__":
     _startup()

@@ -1,0 +1,395 @@
+Lưu ý chi tiết từng chương quan trọng
+
+- Chương 1 (Đặt vấn đề) – viết 5 ý, mục tiêu, phạm vi.
+- Chương 2 (toàn bộ cơ sở lý thuyết, viết lại các công thức, giải thích toán học cho TF-IDF, TextRank, KMeans, Ensemble).
+- Chương 3.3 (Extractive) – chịu trách nhiệm diễn giải các công thức.
+- Chương 3.4 (Label‑Guided Reranker) – mô tả thuật toán, tham số.
+- Chương 3.5 (Chunking) – mô tả cơ chế overlap, hard cut.
+- Chương 3.6 (BartSummarizer) – mô tả remote/local, hierarchical.
+- Chương 4 (Môi trường thực nghiệm) – viết chi tiết cấu hình, baseline, API.
+- Chương 5 (Kết quả & đánh giá) – tổng hợp số liệu (có thể dùng bảng nhưng viết dạng văn bản trong sườn), phân tích.
+- Chương 6 (Demo hệ thống) – mô tả kiến trúc, luồng dữ liệu, giao diện, hướng dẫn cài đặt.
+- Chương 7 (Kết luận và hướng phát triển) – tổng kết, hạn chế, hướng mở.
+- Phụ lục (cấu trúc thư mục, hướng dẫn cài đặt chi tiết, mã nguồn mẫu).
+
+
+- Rà soát tất cả các chương, đảm bảo thống nhất về font, số trang, tài liệu tham khảo.
+- Vẽ các sơ đồ (pipeline, sequence diagram) và hình ảnh minh họa.
+- Tạo bảng biểu (trong phụ lục và chương 5).
+- Viết abstract, mục lục, danh sách hình/bảng.
+- Tổng hợp tài liệu tham khảo (đảm bảo đầy đủ, đúng IEEE).
+- Ưu tiên hình ảnh/bảng biểu... có tông màu trắng sáng để khớp màu nền với words.
+
+---phuong
+
+ SƯỜN BÁO CÁO ĐỒ ÁN (CHI TIẾT, CÓ TOÁN HỌC VÀ TÀI LIỆU THAM KHẢO)
+
+Đề tài: Hệ thống tóm tắt văn bản tự động cho hợp đồng doanh nghiệp (Hybrid Summarization trên CUAD)  
+Nhóm: [Tên nhóm]  
+Giảng viên hướng dẫn: [Tên thầy]  
+Ngày: [dd/mm/yyyy]
+
+---phuong
+
+ CẤU TRÚC TỔNG THỂ BÁO CÁO
+
+- Trang bìa
+- Lời cảm ơn (nếu có)
+- Tóm tắt (Abstract) – 1 trang
+- Mục lục – 1 trang
+- Danh sách hình vẽ, sơ đồ – 1 trang
+- Danh sách bảng biểu – 1 trang (chú thích: bảng sẽ được trình bày trong từng chương)
+- Danh sách thuật ngữ viết tắt (CUAD, BART, ROUGE, TF-IDF, SBERT, LoRA…)
+
+---phuong
+
+ CHƯƠNG 1: ĐẶT VẤN ĐỀ (3-4 trang)
+
+ 1.1. Bối cảnh và động lực nghiên cứu
+
+- Nội dung: Trình bày 5 vấn đề chính:
+  1. Khối lượng hợp đồng lớn, độ dài trung bình 7.861 từ, tối đa 47.733 từ (CUAD).
+  2. Nội dung pháp lý phức tạp, dễ bỏ sót quyền/nghĩa vụ.
+  3. Thời gian đọc và phân tích thủ công rất lớn.
+  4. Các mô hình abstractive (BART) giới hạn 1.024 token → không xử lý được toàn bộ hợp đồng.
+  5. CUAD cung cấp clause labels nhưng thiếu gold summary → cần xây dựng reference từ labels.
+
+- Tài liệu tham khảo: [1] (CUAD), [2] (BART)
+
+ 1.2. Mục tiêu nghiên cứu
+
+- 5 mục tiêu rõ ràng (liệt kê) như đã thống nhất.
+
+ 1.3. Phạm vi và đối tượng
+
+- Dữ liệu: 510 file .txt từ full_contract_txt/, master_clauses.xlsx.
+- Thuật toán: TF-IDF, TextRank, KMeans, Ensemble (extractive) + BART (abstractive).
+- Hạn chế: chỉ xử lý TXT, không xử lý PDF, tiếng Anh.
+
+ 1.4. Hướng tiếp cận đề xuất
+
+- Giới thiệu hybrid pipeline 5 bước (sơ đồ khối, mô tả ngắn).
+- Nhấn mạnh: dùng extractive để lọc 20% câu, chunking + overlap để vượt token limit, label-guided reranker tận dụng CUAD.
+
+ 1.5. Cấu trúc báo cáo
+
+- Liệt kê 7 chương + phụ lục.
+
+---son
+
+ CHƯƠNG 2: CƠ SỞ LÝ THUYẾT VÀ NGHIÊN CỨU LIÊN QUAN (5-6 trang)
+
+ 2.1. Tóm tắt văn bản tự động
+
+ 2.1.1. Tóm tắt trích xuất (Extractive)
+
+- Định nghĩa: chọn và ghép câu gốc.
+- Các phương pháp:
+  - TF-IDF: công thức score(s) = (Σ_tfidf(w)) / len(s). Diễn giải toán học: tf-idf(w) = tf(w,s) * log(N/df(w)).
+  - TextRank: xây đồ thị câu, trọng số cạnh là cosine similarity giữa vector TF-IDF, giải PageRank: PR(v) = (1-d) + d * Σ(PR(u)/|Out(u)|). Trích dẫn [3].
+  - K-Means: embedding câu bằng SBERT [4], vector 384 chiều, gom cụm, chọn câu gần tâm. Công thức khoảng cách Euclidean.
+- Hạn chế: câu rời rạc, thiếu liên kết.
+
+ 2.1.2. Tóm tắt trừu tượng (Abstractive)
+
+- Định nghĩa: sinh văn bản mới.
+- Mô hình BART [2]: encoder-decoder transformer, denoising pre-training.
+- Giới hạn context window 1.024 token.
+
+ 2.1.3. Tóm tắt lai (Hybrid)
+
+- Ý tưởng: extractive → abstractive.
+- Các nghiên cứu liên quan: Tayronas Trigrams [5], ETT model [6], llm-contract-analyzer [7].
+
+ 2.2. Bộ dữ liệu CUAD
+
+- Cấu trúc thư mục: full_contract_txt/ (510 file .txt), master_clauses.xlsx.
+- 41 loại điều khoản (liệt kê nhóm chính).
+- Xây dựng reference: dùng ReferenceBuilder để gộp clause từ CSV.
+
+ 2.3. Nghiên cứu liên quan (3 phương pháp mới)
+
+- CUAD-summarization (2023) [8]: fine-tune BART/Pegasus/T5 trên CUAD, bị truncate → ROUGE-L ~0.42.
+- llm-contract-analyzer (2025) [7]: two-stage RAG + GPT-4, phụ thuộc API.
+- Tayronas Trigrams (2025) [5]: hybrid (PACSUM + Gemini) cho bản án Ấn Độ, ROUGE-2=21.05.
+- So sánh điểm mạnh/yếu.
+
+ 2.4. Chốt phương pháp đề xuất
+
+- Pipeline hybrid 5 bước với Label‑Guided Reranker, chunking overlap, hierarchical BART.
+- Nhấn mạnh tính mới: tận dụng nhãn CUAD để rerank, xử lý văn bản siêu dài.
+
+---son
+
+ CHƯƠNG 3: PHƯƠNG PHÁP ĐỀ XUẤT (6-7 trang)
+
+ 3.1. Kiến trúc tổng thể
+
+- Sơ đồ pipeline (mô tả bằng lời + có thể vẽ hình).
+- Các module chính: Loader, Cleaner, Splitter, Extractor, Reranker, Chunker, Summarizer.
+
+ 3.2. Tiền xử lý (Preprocessing)
+
+- TextCleaner: các bước chi tiết (NFKC, regex patterns).
+- SentenceSplitter: NLTK, lọc min_words=5, max_words=80.
+
+ 3.3. Tóm tắt trích xuất
+
+- Cơ sở toán học chung: cho một tập câu S = {s1,...,sn}, tính điểm φ(si), chọn top k = max(5, round(0.2*n)).
+- TF-IDF: ma trận tf-idf, score(s) = (sum_{w in s} tfidf(w)) / len(s). Giải thích tfidf(w) = tf(w,s) * log(N/df(w)).
+- TextRank: xây ma trận similarity A, Aij = cosine_sim(v_i, v_j). PageRank: r = (1-d) * 1/n + d * A^T * r. Dùng networkx.pagerank.
+- KMeans: dùng SBERT [4] tạo embedding E ∈ R^{n×384}. Chạy K-Means với K = k. Điểm câu = 1/(1 + d_i) với d_i là khoảng cách đến tâm cụm.
+- Ensemble: min-max normalization từng vector điểm, sau đó cộng trọng số (TF-IDF:1.0, TextRank:1.5, KMeans:1.0).
+
+ 3.4. Label‑Guided Reranker (Điểm mới)
+
+- Ý tưởng: dùng clause từ CUAD làm tín hiệu yếu.
+- Thuật toán:
+  1. Lấy danh sách clause C = {c1,...,cm} cho doc_id từ master_clauses.
+  2. SBERT embedding câu Q ∈ R^{n×384} và clause R ∈ R^{m×384}.
+  3. Tính ma trận similarity S = Q * R^T (cosine similarity).
+  4. Với mỗi clause j, tìm câu i* = argmax_i Sij.
+  5. Nếu Sij ≥ threshold (0.35) và câu i* chưa được chọn, thêm vào tập extra.
+  6. Giới hạn extra ≤ max_extra = 0.4 * n.
+- Tham số: sim_threshold=0.35, max_extra_ratio=0.4.
+
+ 3.5. Chunking (LongDocChunker)
+
+- Mục đích: chia text sau extract+rerank thành các chunk ≤ 1024 token.
+- Thuật toán: duyệt câu, cộng dồn token, khi vượt quá thì đẩy chunk, giữ lại overlap câu cuối (overlap=50 token).
+- Xử lý câu dài đơn lẻ: cắt cứng (hard cut) theo token.
+
+ 3.6. Tóm tắt trừu tượng với BART
+
+- Mô hình: facebook/bart-large-cnn [2].
+- Cơ chế inference: remote GPU worker (HTTP) hoặc local.
+- Hierarchical: 
+  - Nếu keep_chunks=True: ghép các chunk summaries.
+  - Nếu keep_chunks=False và merged text > 1024 token → tóm tắt lần 2.
+- Tham số sinh: max_length=256, min_length=80, num_beams=4, length_penalty=2.0, no_repeat_ngram_size=3.
+
+ 3.7. Tích hợp pipeline (HybridPipeline)
+
+- Lớp HybridPipeline gọi lần lượt các module, dùng Timer đo thời gian.
+- AppState singleton cache model và pipeline.
+
+ 3.8. Fine‑tune BART (phần chuẩn bị)
+
+- CuadDatasetBuilder: xây cặp (input = TextRank extractive text, target = gộp clause).
+- BartFineTuner: dùng Seq2SeqTrainer, hỗ trợ LoRA, early stopping.
+- Tham số: epochs=3, batch_size=2, grad_accum=8, lr=3e-5.
+
+---son
+
+ CHƯƠNG 4: MÔI TRƯỜNG THỰC NGHIỆM (3-4 trang)
+
+ 4.1. Dữ liệu
+
+- 510 file .txt từ full_contract_txt/.
+- Reference từ master_clauses.xlsx dùng ReferenceBuilder.
+- Check lại có đang chia tập fine-tune (80/10/10) hay như thế nào.
+
+ 4.2. Cấu hình tham số (nên dùng bảng + giải thích chi tiết)
+
+Ví dụ:
+- TOP_K_RATIO = 0.2
+- MIN_SENT_LEN = 5
+- MAX_SENT_LEN = 80
+- BART_MAX_INPUT = 1024
+- BART_MAX_OUTPUT = 256
+- CHUNK_OVERLAP = 50
+- LABEL_SIM_THRESHOLD = 0.35
+- LABEL_MAX_EXTRA_RATIO = 0.4
+- SBERT_MODEL = "all-MiniLM-L6-v2"
+- (Tiếp tục)
+
+ 4.3. Các mô hình baseline (nên dùng bảng + giải thích chi tiết)
+
+Liệt kê 6 baseline:
+1. BART thuần (truncate)
+2. Extractive thuần (TextRank)
+3. TF-IDF + BART
+4. TextRank + BART
+5. KMeans + BART
+6. Ensemble + BART
+7. Đề xuất (TextRank + BART + Reranker)
+
+ 4.4. Hạ tầng phần cứng và phần mềm (nên dùng bảng + giải thích chi tiết)
+
+- Backend: Flask, PyTorch, transformers.
+- GPU worker: RTX 3090 (24GB) tùy chọn.
+- Frontend: React, AntD, Tailwind.
+- Database: PostgreSQL (auth).
+
+ 4.5. Các API endpoint (liệt kê 8 endpoint) (nên dùng bảng + giải thích chi tiết)
+
+- POST /api/summarize
+- POST /api/extract
+- GET /api/documents
+- GET /api/documents/<id>
+- POST /api/eval/run
+- POST /api/auth/register
+- POST /api/auth/login
+- GET /api/health
+
+ 4.6. Công cụ đánh giá (nên dùng bảng + giải thích chi tiết)
+
+- RougeEvaluator (thư viện rouge_score) tính ROUGE-1, ROUGE-2, ROUGE-L.
+- BertScoreEvaluator (thư viện bert_score) với roberta-large.
+
+---son
+
+ CHƯƠNG 5: KẾT QUẢ VÀ ĐÁNH GIÁ (4-5 trang)
+
+ 5.1. Chỉ số đánh giá
+
+- Giải thích ROUGE (Recall-Oriented Understudy for Gisting Evaluation): công thức tính precision, recall, F1 cho rouge-n, rouge-L (dựa trên longest common subsequence).
+- BERTScore: tính similarity giữa vector embedding của prediction và reference.
+
+ 5.2. Kịch bản thực nghiệm (nên dùng bảng + giải thích chi tiết)
+
+- So sánh các extractor (chỉ extractive).
+- So sánh các pipeline hybrid (với BART).
+- Đánh giá tác động của reranker.
+- Đánh giá tác động của overlap và hierarchical.
+
+ 5.3. Kết quả (nên dùng bảng + giải thích chi tiết)
+
+- Extractive: TextRank ROUGE-L = 0.39, Ensemble 0.40.
+- BART thuần: ROUGE-L = 0.30 (do truncate).
+- Các hybrid:
+  - TF-IDF+BART: ~0.42
+  - TextRank+BART: 0.47
+  - Ensemble+BART: 0.45
+  - Đề xuất (TextRank+BART+Reranker): 0.49
+- Reranker cải thiện +0.02 ROUGE-L, tăng 0.7s.
+- Overlap=50 cải thiện từ 0.45→0.47.
+- keep_chunks=False: compression 12:1, giảm ROUGE-L 0.01 so với keep_chunks=True.
+
+ 5.4. So sánh với nghiên cứu liên quan (nên dùng bảng + giải thích chi tiết)
+
+- So với CUAD-summarization (ROUGE-L ~0.42) → cải thiện 0.07.
+- So với BART thuần → cải thiện 0.17.
+- So với llm-contract-analyzer: không so sánh trực tiếp vì khác phương pháp.
+
+ 5.5. Thảo luận
+
+- Giải thích tại sao TextRank tốt nhất.
+- Tại sao reranker hiệu quả (nhờ clause chuyên gia).
+- Hạn chế: thời gian, phụ thuộc CUAD.
+
+---son
+
+ CHƯƠNG 6: DEMO HỆ THỐNG (2-3 trang)
+
+ 6.1. Kiến trúc hệ thống
+
+- Mô tả thành phần: backend Flask, frontend React, GPU worker, PostgreSQL.
+- Luồng dữ liệu (sequence diagram): User → Frontend → Backend → AppState → HybridPipeline → kết quả.
+
+ 6.2. Các API endpoint (đã liệt kê ở chương 4)
+
+ 6.3. Giao diện người dùng
+
+- Màn hình đăng nhập/đăng ký.
+- Tab "Tóm tắt văn bản": 3 cột (chọn doc, chọn extractor, tiến trình) + panel kết quả với 4 tab Extractive, Abstractive, ROUGE, Timing.
+- Các thông báo lỗi.
+
+ 6.4. Hướng dẫn cài đặt và chạy
+
+- Các bước cài đặt backend, frontend, GPU worker.
+- Biến môi trường cần thiết.
+- Ví dụ chạy lệnh.
+
+ 6.5. Ví dụ minh họa
+
+- Chọn doc 2ThemartComInc..., chạy TextRank + BART + Reranker.
+- Hiển thị kết quả extractive (vài câu) và abstractive (bản tóm tắt).
+
+---phuong
+
+ CHƯƠNG 7: KẾT LUẬN VÀ HƯỚNG PHÁT TRIỂN (2 trang)
+
+ 7.1. Tổng kết đóng góp
+
+- Đã xây dựng pipeline hybrid 5 bước với label-guided reranker và chunking overlap.
+- Đạt ROUGE-L 0.49 trên CUAD, vượt baseline.
+- Hệ thống hoàn chỉnh, có frontend, API, xác thực.
+
+ 7.2. Hạn chế
+
+- BART chưa fine-tune trên legal domain.
+- Reranker phụ thuộc CUAD (không dùng cho hợp đồng mới).
+- Chưa xử lý PDF.
+- Thời gian suy luận còn cao (2.7s/contract).
+
+ 7.3. Hướng phát triển
+
+- Fine-tune BART trên CUAD (đã có module).
+- Thử mô hình LED (Longformer) [10].
+- Thay SBERT bằng Legal‑BERT.
+- Mở rộng cho hợp đồng tiếng Việt (PhoBERT, ViBART).
+- Tối ưu hiệu năng (ONNX, TensorRT, batching).
+
+---phuong
+
+ TÀI LIỆU THAM KHẢO
+
+(Format IEEE)
+
+[1] D. Hendrycks, C. Burns, A. Chen, and S. Ball, "CUAD: An Expert-Annotated NLP Dataset for Legal Contract Review," *arXiv preprint arXiv:2103.06268*, 2021.
+
+[2] M. Lewis et al., "BART: Denoising Sequence-to-Sequence Pre-training for Natural Language Generation, Translation, and Comprehension," in *Proceedings of ACL*, 2020, pp. 7871–7880.
+
+[3] R. Mihalcea and P. Tarau, "TextRank: Bringing Order into Texts," in *Proceedings of EMNLP*, 2004, pp. 404–411.
+
+[4] N. Reimers and I. Gurevych, "Sentence-BERT: Sentence Embeddings using Siamese BERT-Networks," in *Proceedings of EMNLP*, 2019, pp. 3982–3992.
+
+[5] J. Parada, L. F. Rodriguez, and M. A. Rincón, "Hybrid Extractive-Abstractive Summarization for Legal Judgments: A Case Study on Tayronas Trigrams," in *JUST-NLP 2025*, 2025.
+
+[6] (Bài báo ETT model – nếu có, hoặc có thể thay bằng nghiên cứu về hybrid khác)
+
+[7] pranawmishra, "llm-contract-analyzer," *GitHub repository*, 2025.
+
+[8] AkashR04, "CUAD-summarization," *GitHub repository*, 2023.
+
+[9] T. Zhang et al., "BERTScore: Evaluating Text Generation with BERT," in *ICLR 2020*, 2020.
+
+[10] I. Beltagy, M. E. Peters, and A. Cohan, "Longformer: The Long-Document Transformer," *arXiv preprint arXiv:2004.05150*, 2020.
+
+[11] E. Hu et al., "LoRA: Low-Rank Adaptation of Large Language Models," in *ICLR 2022*, 2022.
+
+*(Có thể bổ sung thêm các tài liệu về TF-IDF, K-Means nếu cần)*
+
+---phuong
+
+ PHỤ LỤC
+
+ Phụ lục A: Cấu trúc thư mục mã nguồn
+
+(liệt kệ cây thư mục)
+
+ Phụ lục B: Bảng tham số đầy đủ
+
+(Sẽ trình bày bằng bảng, nhưng ghi chú: dùng bảng để liệt kê tất cả tham số và giá trị)
+
+ Phụ lục C: Hướng dẫn cài đặt chi tiết (các bước, câu lệnh)
+
+ Phụ lục D: Một số đoạn mã chính (ví dụ: HybridPipeline.run(), LabelGuidedReranker.rerank())
+
+---
+
+
+ LƯU Ý QUAN TRỌNG KHI VIẾT BÁO CÁO
+
+- Toán học: Mỗi công thức phải được giải thích rõ ràng, định nghĩa các ký hiệu. Ví dụ: tf(w,s) là tần suất từ w trong câu s, df(w) là số câu chứa w, N là tổng số câu.
+- Tài liệu tham khảo: Trích dẫn ngay trong nội dung, ví dụ: "Theo TextRank [3], điểm số của một câu được tính bằng..." . Cuối báo cáo phải có danh sách đầy đủ.
+- Bảng biểu: Khi viết báo cáo thật, nên dùng bảng để so sánh kết quả (chương 5) và liệt kê tham số (chương 4, phụ lục). Có thể tham khảo định dạng bảng như:
+  
+  +----------------+--------+--------+--------+
+  |   Model        | R-1    | R-2    | R-L    |
+  +----------------+--------+--------+--------+
+  | TextRank (ext) | 0.42   | 0.22   | 0.39   |
+  +----------------+--------+--------+--------+
+
+

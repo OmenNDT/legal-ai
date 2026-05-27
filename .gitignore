@@ -45,5 +45,6 @@ venv/
 
 # Large directories
 data/
+data_raw/
 models/
 chroma_data/

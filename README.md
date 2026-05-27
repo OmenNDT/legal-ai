@@ -21,6 +21,43 @@ A modular legal question-answering platform for Vietnamese law, combining custom
 | Chatbot | NLP | PhoBERT intent classifier (20 intents) + NER (9 entity types) | Understand question, route to modules, synthesize answer |
 | Summarizer | Python ML | PhoBERT sentence scorer + TextRank | Extract key sentences from documents |
 | Knowledge Graph | AI | NetworkX DiGraph + legal reasoning | Trace validity, amendments, relationships between documents |
+| **RAG Extract** | **RAG Pipeline** | **Section-aware chunking + Ollama embedding + ChromaDB/pgvector** | **Ingest technical documents → vector store for semantic search** |
+
+## RAG Extract (tích hợp từ BTMH)
+
+Module trích xuất và lập chỉ mục tài liệu kỹ thuật (ASME, API, ASTM) vào vector store để hỗ trợ semantic search.
+
+| Tính năng | Mô tả |
+|-----------|-------|
+| Chunking | Section-aware hierarchical splitting (giữ nguyên cấu trúc mục lục) |
+| Embedding | Ollama `qwen3-embedding:8b` (4096 dims) |
+| Vector Store | ChromaDB (default, file-based) hoặc PostgreSQL + pgvector (production) |
+| Auth | API Key (`X-API-Key` header) — không cần user database |
+| Progress | SSE stream theo dõi tiến độ indexing |
+
+### RAG Extract API Endpoints
+
+| Endpoint | Method | Auth | Description |
+|----------|--------|------|-------------|
+| `/api/rag-extract/health` | GET | — | Health check |
+| `/api/rag-extract/stats` | GET | API Key | Document stats |
+| `/api/rag-extract/query` | POST | API Key | RAG semantic search |
+| `/api/rag-extract/documents` | GET | API Key | List documents |
+| `/api/rag-extract/documents/<id>` | GET | API Key | Get document detail |
+| `/api/rag-extract/index/stats` | GET | API Key | Vector store stats |
+| `/api/rag-extract/init-db` | POST | Admin | Reset DB |
+
+### Cấu hình
+
+Copy từ `backend/rag_extract/.env.example` vào `.env` chính:
+
+```bash
+RAG_API_KEY=your-key
+RAG_ADMIN_API_KEY=your-admin-key
+VECTOR_STORE_TYPE=chromadb  # hoặc postgres
+CHROMA_DIR=./backend/rag_extract/data/chroma
+OLLAMA_URL=http://127.0.0.1:11434
+```
 
 ## Quick Start
 

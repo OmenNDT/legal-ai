@@ -1,5 +1,5 @@
 import { Menu, Layout, Tooltip, Dropdown } from 'antd';
-import { Search, MessageSquare, Scale, Home, User, LogOut, ChevronDown, Cpu } from 'lucide-react';
+import { Search, MessageSquare, Scale, Home, User, LogOut, ChevronDown, Cpu, Database } from 'lucide-react';
 
 const { Header } = Layout;
 
@@ -24,6 +24,11 @@ const AppHeader = ({ activeTab, onTabChange, user, onOpenAuth, onLogout }) => {
       key: 'string-matching',
       icon: <Cpu size={16} />,
       label: 'Tìm kiếm văn bản',
+    },
+    {
+      key: 'rag-extract',
+      icon: <Database size={16} />,
+      label: 'RAG Extract',
     },
   ];
 

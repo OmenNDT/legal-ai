@@ -27,4 +27,4 @@ echo "Starting Flask on http://0.0.0.0:9010"
 echo "  - Local:   http://localhost:9010"
 [ -n "$HOST_IP" ] && echo "  - Network: http://$HOST_IP:9010"
 
-python -m backend.app
+"$ROOT/.venv/bin/python3" -m backend.app
