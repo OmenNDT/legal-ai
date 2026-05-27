@@ -1,0 +1,7 @@
+receiving incremental file list
+./
+model.safetensors
+rsync error: unexplained error (code 255) at rsync.c(716) [generator=3.2.7]
+rsync: [generator] write error: Broken pipe (32)
+rsync error: received SIGINT, SIGTERM, or SIGHUP (code 20) at io.c(519) [receiver=3.2.7]
+rsync: [receiver] write error: Broken pipe (32)

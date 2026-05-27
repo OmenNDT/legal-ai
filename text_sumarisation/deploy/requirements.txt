@@ -1,0 +1,16 @@
+# Backend dependencies (CPU)
+flask == 3.0.3
+flask-cors == 4.0.1
+pandas == 2.2.2
+numpy == 1.26.4
+scikit-learn == 1.5.1
+nltk == 3.9.1
+networkx == 3.3
+sentence-transformers == 3.0.1
+transformers == 4.44.2
+torch == 2.4.0
+rouge-score == 0.1.2
+bert-score == 0.3.13
+openpyxl == 3.1.5
+tqdm == 4.66.5
+fabric == 3.2.2

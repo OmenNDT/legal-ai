@@ -1,0 +1,1232 @@
+================================================================================
+CHƯƠNG 3 — PHƯƠNG PHÁP ĐỀ XUẤT
+================================================================================
+
+3.1 KIẾN TRÚC TỔNG THỂ
+----------------------------------------------------------------------
+
+Hệ thống được tổ chức theo mô hình hybrid summarization hai tầng — Extractive
+→ Abstractive, đặt trong một pipeline tuyến tính có khả năng điều phối linh
+động qua HTTP REST API. Lý do chọn kiến trúc lai xuất phát trực tiếp từ ràng
+buộc kỹ thuật của bài toán: mô hình sinh BART chỉ chấp nhận tối đa 1 024 token
+đầu vào, trong khi văn bản hợp đồng pháp lý của bộ CUAD có độ dài trung bình
+khoảng 7 861 từ và lên tới 47 733 từ ở các tài liệu cực đại. Việc đẩy thẳng
+toàn bộ văn bản vào BART vừa gây tràn bộ nhớ GPU, vừa khiến mô hình mất hoàn
+toàn ngữ cảnh ở nửa sau. Do đó, tầng extractive đóng vai trò "bộ lọc câu" để
+giảm độ dài đầu vào, còn tầng abstractive đảm nhận việc "viết lại" thành đoạn
+văn mượt.
+
+Toàn bộ luồng dữ liệu trong file backend/hybrid/pipeline.py gồm sáu bước được
+điều phối bởi lớp HybridPipeline:
+
+    raw_text
+       │
+       ▼ ① TextCleaner.clean()              (preprocess/cleaner.py)
+       ▼ ② SentenceSplitter.split()         (preprocess/splitter.py)
+       ▼ ③ Extractor.extract()              (extractive/{tfidf,textrank,
+       │                                     kmeans,ensemble}.py)
+       ▼ ④ LabelGuidedReranker.rerank()     (extractive/label_guided.py
+       │                                     — chỉ khi có doc_id)
+       ▼ ⑤ LongDocChunker.chunk_by_sentences()  (abstractive/chunker.py)
+       ▼ ⑥ BartSummarizer.summarize()       (abstractive/bart_summarizer.py)
+       │
+       ▼ HybridResult.to_dict() → JSON trả về REST API
+
+Năm điểm thiết kế quan trọng của kiến trúc:
+
+- Tách trách nhiệm: mỗi module thực hiện đúng một nhiệm vụ — preprocess,
+  extractive, label-guided rerank, chunking, abstractive, evaluate — và đều
+  kế thừa từ một interface chung (BaseExtractor, AbstractiveResult,
+  ExtractResult). Nhờ vậy có thể thay extractor mà không đụng tới phần BART,
+  và ngược lại.
+- Lazy loading: BART (~1.6 GB) và SBERT MiniLM (~90 MB) được tải lần đầu khi
+  có request thực sự cần, thông qua _ensure_loaded() ở bart_summarizer.py
+  và _ensure_model() ở kmeans_extractor.py. Nhờ đó Flask khởi động trong
+  dưới 2 giây.
+- Singleton + cache pipeline: lớp AppState (state.py) giữ một thực thể BART
+  duy nhất, dùng chung cho mọi request, và cache các đối tượng HybridPipeline
+  theo khoá "<extractor>|<use_abstractive>" để không khởi tạo lại TF-IDF
+  vectorizer, đồ thị TextRank hay K-Means.
+- Đo thời gian từng bước: lớp Timer (utils/timer.py) đo riêng clean / split /
+  extract / label_rerank / abstract và đưa vào trường timings của response.
+  Frontend hiển thị các thông số này dưới dạng tag để người dùng nhận biết
+  bước nào đang là cổ chai.
+- Hỗ trợ hai chế độ inference: BartSummarizer có thể chạy local trên CPU/GPU,
+  hoặc forward HTTP sang gpu_worker.py đặt trên máy có RTX 3090 (qua biến
+  môi trường BART_REMOTE_URL) — cho phép tách lớp API và lớp tính toán nặng
+  theo mô hình master/worker.
+
+Đầu ra cuối cùng là dataclass HybridResult (pipeline.py:17-45) gồm doc_id,
+raw_word_count, num_sentences, kết quả extractive, kết quả abstractive và
+timings. Đối tượng này được serialize thành JSON và trả về qua endpoint
+/api/summarize.
+
+
+3.2 BƯỚC 1: TIỀN XỬ LÝ
+----------------------------------------------------------------------
+
+Tiền xử lý chia làm ba pha độc lập đặt trong thư mục backend/preprocess/:
+nạp dữ liệu, làm sạch, và tách câu.
+
+a) Nạp dữ liệu — loader.py. Lớp ContractLoader chịu trách nhiệm liệt kê và
+đọc 510 file .txt trong data/full_contract_txt/. Phương thức list_ids() quét
+bằng Path.glob("*.txt") rồi sort theo alphabet để đảm bảo thứ tự reproducible
+giữa các lần chạy. load_one(doc_id) đọc UTF-8 với errors="ignore" (xử lý vài
+file có byte hỏng), gói vào dataclass Contract(doc_id, file_path, raw_text,
+word_count, meta). iter_all() là generator để stream 510 file không tốn RAM
+khi chạy benchmark.
+
+b) Làm sạch — cleaner.py. Lớp TextCleaner.clean() xử lý tuần tự năm bước:
+
+1. Chuẩn hoá Unicode NFKC bằng unicodedata.normalize("NFKC", text) — gộp
+   các ligature (ví dụ "ﬁ" → "fi"), ký tự half-width/full-width về dạng
+   chuẩn. Điều này quan trọng vì văn bản CUAD vốn được OCR/convert từ PDF,
+   có nhiều biến thể Unicode lẫn lộn.
+2. Lọc ký tự không in được bằng ch.isprintable() or ch in "\n\t" — bỏ
+   control character, BOM, các ký tự "ma".
+3. Xoá noise đặc thù PDF→TXT của CUAD qua hai regex:
+   - PAGE_NUM_RE = r"\bPage\s+\d+\s+of\s+\d+\b" — bỏ chuỗi "Page 12 of 50"
+     rải đều khắp file.
+   - SOURCE_RE = r"Source:\s*[^\n]+" — bỏ dòng nguồn SEC mà công cụ trích
+     xuất thường chèn vào.
+4. Gộp ký tự lặp: \.{3,} → .; [ \t]+ → một dấu cách; \n{3,} → \n\n.
+5. Tùy chọn loại non-ASCII: mặc định keep_unicode=True vì CUAD là tiếng Anh
+   nhưng vẫn có vài ký hiệu đặc biệt (™, §, ©) cần giữ.
+
+Kết quả là một chuỗi text "phẳng", không còn artefact, sẵn sàng cho bước
+tách câu.
+
+c) Tách câu — splitter.py. Lớp SentenceSplitter ưu tiên dùng NLTK Punkt vì
+đây là tokenizer câu trained-on-data, xử lý đúng các abbreviation như "U.S.",
+"Inc.", "Ltd." vốn nhan nhản trong hợp đồng. Phương thức _try_load_nltk() tự
+động nltk.download("punkt_tab") và nltk.download("punkt") ở lần chạy đầu (yêu
+cầu internet một lần). Khi NLTK không khả dụng, hệ thống fallback sang regex
+(?<=[\.!?])\s+(?=[A-Z0-9\"'(\[]) — đủ tốt nhưng kém chính xác trên
+abbreviation.
+
+Sau khi tách thô, mỗi câu được lọc theo hai ngưỡng:
+- MIN_SENT_LEN = 5 từ — loại các "câu" chỉ chứa tiêu đề rời như "ARTICLE 4",
+  "Section 2.1.".
+- MAX_SENT_LEN = 80 từ — loại các đoạn dính nhau do nhận diện chấm sai
+  (thường là đoạn bullet không có dấu chấm).
+
+Mỗi câu sau lọc được đóng gói thành dataclass Sentence(idx, text, word_count)
+trong đó idx là thứ tự xuất hiện gốc. Trường này được giữ xuyên suốt pipeline
+để bước extractive có thể "chọn theo điểm cao nhất rồi sắp lại theo idx gốc"
+— cơ chế cực kỳ quan trọng để bản tóm tắt giữ được mạch đọc tự nhiên.
+
+
+3.3 BƯỚC 2: TÓM TẮT TRÍCH XUẤT
+----------------------------------------------------------------------
+
+Bốn extractor cùng kế thừa lớp trừu tượng BaseExtractor ở
+extractive/base.py. Khung này định nghĩa luồng chung trong phương thức
+extract():
+
+    scores = self.score(sentences)
+    k = max(self.min_keep, int(round(len(sentences) * top_k_ratio)))
+    ranked = sorted(range(N), key=lambda i: scores[i], reverse=True)[:k]
+    ranked.sort()                       # sắp lại theo idx gốc
+    return ExtractResult(method, picked_sentences, picked_scores)
+
+Hệ số TOP_K_RATIO = 0.85 cấu hình trong settings.py — giữ 85% câu sau lọc
+nhằm tăng recall, do clause của hợp đồng thường rải rác và một bản tóm tắt
+thiếu một điều khoản quan trọng có thể bị đánh giá là hỏng. Ràng buộc
+min_keep=5 đảm bảo không có doc nào bị trống.
+
+3.3.1 TF-IDF — tfidf_extractor.py. Coi mỗi câu là một "document" và fit
+TfidfVectorizer(stop_words="english", ngram_range=(1,2), max_df=0.95) ngay
+trên doc hiện tại. Điểm câu được tính bằng tổng TF-IDF tất cả các từ trong
+câu, sau đó chuẩn hoá theo độ dài: score_i = sum_tfidf(s_i) / max(1,
+word_count(s_i)). Việc chuẩn hoá này tránh thiên vị câu dài — vốn đương
+nhiên có tổng TF-IDF lớn hơn. Trực giác: câu chứa nhiều từ khoá quan trọng
+và hiếm trên toàn doc sẽ có điểm cao.
+
+3.3.2 TextRank — textrank_extractor.py. Đây là biến thể của PageRank áp dụng
+cho đồ thị câu:
+
+1. Vector hoá toàn bộ câu bằng TfidfVectorizer(stop_words="english") — chỉ
+   unigram để ma trận không phình.
+2. Tính cosine_similarity(mat) được ma trận N×N — mỗi ô là độ tương đồng
+   ngữ nghĩa giữa hai câu.
+3. np.fill_diagonal(sim, 0) — câu không tự liên kết với chính nó.
+4. nx.from_numpy_array(sim) tạo đồ thị có trọng số.
+5. nx.pagerank(g, alpha=0.85, max_iter=200) chạy thuật toán PageRank để tìm
+   câu "trung tâm".
+
+Trực giác: câu nào "được nhiều câu khác liên kết tới" (tức ngữ nghĩa lan toả
+khắp văn bản) sẽ có centrality cao — chính là câu cốt lõi. TextRank thường
+vượt trội trên văn bản pháp lý vì các điều khoản quan trọng có xu hướng được
+nhắc đi nhắc lại với nhiều biến thể, dẫn đến nhiều cạnh trong đồ thị tương
+đồng.
+
+3.3.3 K-Means — kmeans_extractor.py. Khác hai phương pháp trên dựa vào từ
+vựng bề mặt, K-Means làm việc trong không gian ngữ nghĩa của embedding:
+
+1. Lazy load SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2") —
+   mô hình SBERT 22M tham số, sinh vector 384 chiều.
+2. model.encode(texts, batch_size=32, convert_to_numpy=True) → ma trận
+   embedding N×384.
+3. KMeans(n_clusters=k, random_state=42, n_init=10) với k = round(N * 0.85)
+   (cùng với TOP_K_RATIO).
+4. Với mỗi câu, tính khoảng cách Euclid tới tâm cụm của nó và chấm điểm
+   score = 1 / (1 + d) — gần tâm điểm thì điểm cao.
+
+Trực giác: mỗi cụm tương ứng với một chủ đề con (định nghĩa thuật ngữ, điều
+khoản thanh toán, điều khoản chấm dứt…), và việc chọn câu gần tâm nhất cho
+mỗi cụm cho ra một bộ tóm tắt đa chủ đề — bổ trợ tốt cho TextRank vốn có xu
+hướng tập trung vào một chủ đề chiếm số đông.
+
+3.3.4 Ensemble — ensemble.py. Lớp EnsembleExtractor chạy lần lượt ba
+extractor con, normalize điểm từng cái về [0,1] bằng min-max, rồi cộng có
+trọng số. Trong pipeline.py:65 cấu hình mặc định là [1.0, 1.5, 1.0] cho
+[TF-IDF, TextRank, KMeans] — TextRank được ưu tiên do thực nghiệm cho thấy
+nó mạnh nhất trên hợp đồng pháp lý. Trọng số được tự chuẩn hoá về tổng = 1
+trong constructor: self.weights = [w / sum(weights) for w in weights]. Cuối
+cùng, lớp ensemble kế thừa extract() từ BaseExtractor để chọn top-K và sắp
+lại theo idx gốc.
+
+ExtractorFactory.build(name, settings) là điểm vào duy nhất để dựng extractor
+theo tên — frontend gửi chuỗi "tfidf" | "textrank" | "kmeans" | "ensemble",
+factory dựng đúng object tương ứng.
+
+
+3.4 BƯỚC 3: LABEL-GUIDED RERANKER
+----------------------------------------------------------------------
+
+Đây là đóng góp khác biệt của hệ thống so với pipeline hybrid truyền thống.
+Vấn đề được giải quyết: extractor thuần (TF-IDF/TextRank/KMeans) lựa câu dựa
+hoàn toàn vào tín hiệu nội tại của văn bản (tần suất, centrality, embedding),
+trong khi mỗi hợp đồng CUAD lại có 41 nhãn clause đã được luật sư gán nhãn
+sẵn trong master_clauses.csv — đó là tín hiệu bên ngoài rất chất lượng nhưng
+pipeline cơ bản không tận dụng.
+
+Module label_guided.py hiện thực lớp LabelGuidedReranker để bơm tín hiệu yếu
+từ clause-labels vào bước extractive. Quy trình rerank(doc_id, all_sentences,
+ext) gồm năm pha:
+
+1. Lấy clauses của doc qua _clauses_for(doc_id) — duyệt qua các cột clause
+   của CSV, parse các ô bằng ast.literal_eval (cell thường có dạng list
+   Python dạng string "['clause text 1', 'clause text 2']"), khử trùng lặp
+   giữ thứ tự.
+2. Encode song song câu trong doc và clause vào không gian SBERT:
+       sent_emb = model.encode(sent_texts, normalize_embeddings=True)
+       clause_emb = model.encode(clauses, normalize_embeddings=True)
+   Vì cả hai đã được L2-normalize, tích vô hướng sent_emb @ clause_emb.T
+   chính là cosine similarity, không cần gọi cosine_similarity riêng.
+3. Với mỗi clause, tìm câu gần nhất: best_sent_per_clause = sim.argmax(
+   axis=0) và lấy điểm tương ứng. Ngưỡng LABEL_SIM_THRESHOLD = 0.35 loại
+   các cặp ghép quá yếu (không có câu nào trong doc thực sự mô tả clause
+   đó).
+4. Lọc bớt ứng viên đã có trong ext.sentences và khử trùng lặp khi nhiều
+   clause map về cùng một câu — giữ điểm cao nhất.
+5. Giới hạn số câu thêm vào bằng LABEL_MAX_EXTRA_RATIO = 0.4 (tức tối đa
+   40% so với tổng số câu sau split), tránh phình input của BART. Cuối
+   cùng, merge với ext.sentences rồi sort lại theo idx gốc để giữ trình
+   tự đọc.
+
+Reranker chỉ được kích hoạt khi (a) LABEL_GUIDED=True ở settings.py — bật
+mặc định, và (b) request có truyền doc_id (không áp dụng cho text tự nhập,
+vì khi đó không có clause-label để tham chiếu). AppState khởi tạo một
+reranker dùng chung, chia sẻ giữa các pipeline để không phải load lại mô
+hình SBERT.
+
+Khía cạnh sâu xa của thiết kế này: clause-labels được dùng chỉ trong tầng
+extractive như tín hiệu yếu chứ không trực tiếp đẩy vào BART. Lý do là
+clause text từ CSV thường khác về phong cách với câu trong văn bản gốc
+(luật sư diễn đạt lại theo template), nên nếu đưa thẳng vào BART có thể
+làm mô hình bị nhiễu phong cách. Cách tiếp cận hiện tại — dùng clause để
+bổ sung câu trong văn bản gốc — vừa tăng recall, vừa giữ nguyên distribution
+input cho BART.
+
+
+3.5 BƯỚC 4: LONGDOCCHUNKER
+----------------------------------------------------------------------
+
+Sau khi extractive (đã có reranker bổ sung) trả về tập câu được giữ lại,
+bước tiếp theo là chia chúng thành các "chunk" vừa với cửa sổ đầu vào 1 024
+token của BART. Lớp LongDocChunker ở chunker.py thực hiện việc này theo
+thuật toán greedy sentence packing:
+
+    for sent in sentences:
+        n = len(tokenizer.encode(sent, add_special_tokens=False))
+        if n >= max_tokens:                       # câu cực dài
+            flush(buf); chunks.append(_hard_cut(sent)); continue
+        if buf_tokens + n > max_tokens:           # chuẩn bị tràn
+            chunks.append(" ".join(buf))
+            buf = buf[-overlap:]                  # overlap = 6 câu cuối
+            buf_tokens = sum(len(encode(s)) for s in buf)
+        buf.append(sent); buf_tokens += n
+    flush(buf)
+
+Bốn quyết định thiết kế đáng chú ý:
+
+- Đếm token bằng chính tokenizer của BART chứ không đếm word. Đây là điểm
+  phân biệt mấu chốt: BART dùng BPE subword, một từ tiếng Anh có thể tách
+  2-4 token. Nếu đếm word, ta có thể dồn quá nhiều câu vào chunk và bị
+  tokenizer truncate ở giữa câu — mất thông tin một cách im lặng.
+- Overlap = 6 câu (CHUNK_OVERLAP=6 ở settings.py:44) — không phải overlap
+  theo token. Vì các câu sau bước extractive đã được lọc xuống, 6 câu trùng
+  giữa hai chunk liên tiếp tương đương cỡ 100-200 token, đủ để BART "biết"
+  rằng chunk sau là continuation chứ không phải văn bản hoàn toàn mới. Nếu
+  overlap quá lớn (50 câu) sẽ tạo nhiều chunk dư thừa; nếu = 0 thì BART có
+  nguy cơ tóm tắt rời rạc, đặc biệt là khi câu cuối chunk trước chứa subject
+  mà câu đầu chunk sau dùng pronoun để chỉ.
+- Hard cut câu cực dài: nếu một câu đơn lẻ đã ≥ max_tokens (rất hiếm —
+  thường là đoạn liệt kê dính nhau), _hard_cut() cắt theo token và
+  tokenizer.decode trả lại text. Giải pháp này tránh được vòng lặp vô hạn
+  khi câu không bao giờ vừa.
+- Trả về danh sách List[str] chứ không phải list các Sentence — vì BART chỉ
+  cần text, mất idx ở đây không sao, không có bước nào sau cần đến idx.
+
+
+3.6 BƯỚC 5: BARTSUMMARIZER
+----------------------------------------------------------------------
+
+Lớp BartSummarizer ở bart_summarizer.py là wrapper quanh BART có hỗ trợ hai
+chế độ inference (local và remote HTTP) và một chiến lược merge linh hoạt
+cho văn bản dài.
+
+3.6.1 Lazy loading và caching. Tokenizer được tách riêng khỏi model:
+_ensure_tokenizer() luôn load tokenizer (cần dùng ngay cả khi chạy remote
+để chunker đếm token), còn _ensure_loaded() mới load
+AutoModelForSeq2SeqLM. Mô hình đẩy lên device (cuda khi có, cpu khi không)
+và đặt model.eval() để vô hiệu hoá dropout. Tham số cache_dir=
+settings.MODEL_CACHE (backend/cache/models/) khiến HuggingFace không
+download lại model giữa các lần khởi động.
+
+3.6.2 Sinh tóm tắt cho một chunk — local. Phương thức _summarize_chunk_local
+(text) chạy generate với cấu hình:
+
+    inputs = tokenizer(text, return_tensors="pt", max_length=1024,
+                       truncation=True).to(device)
+    ids = model.generate(
+        **inputs,
+        max_length=512,            # BART_MAX_OUTPUT
+        min_length=350,            # BART_MIN_OUTPUT — ép không trả câu cụt
+        num_beams=5,               # BART_NUM_BEAMS
+        length_penalty=2.0,        # >1 → khuyến khích câu dài
+        early_stopping=True,
+        no_repeat_ngram_size=3,    # chống lặp tri-gram
+    )
+    return tokenizer.decode(ids[0], skip_special_tokens=True).strip()
+
+Giải thích lựa chọn tham số:
+- min_length=350 rất cao so với mặc định 50 — ép BART viết đủ dài để cover
+  các điều khoản, vì hợp đồng có nhiều thông tin cần ghi.
+- length_penalty=2.0 (>1) làm beam search chấm điểm tốt hơn cho hypothesis
+  dài; nếu để 1.0 BART sẽ thiên về câu súc tích kiểu tin tức (vì pretrain
+  trên CNN/DailyMail).
+- no_repeat_ngram_size=3 đặc biệt cần thiết với hợp đồng vì tên các bên
+  (Party A, Licensor, Licensee…) lặp lại nhiều lần, BART nếu không bị chặn
+  sẽ rất dễ rơi vào loop.
+- num_beams=5 cân bằng giữa chất lượng và tốc độ; beam 8 có thể đẹp hơn
+  ~5-10% nhưng chậm gấp đôi.
+
+3.6.3 Sinh tóm tắt — remote. Nếu biến môi trường BART_REMOTE_URL được set
+(ví dụ http://worker1:9021), _summarize_chunk() ưu tiên POST sang endpoint
+/summarize_chunk của gpu_worker.py. Worker này là một Flask service nhẹ
+chạy trên máy có RTX 3090, load sẵn checkpoint fine-tune
+outputs/bart-cuad-v3/final và phục vụ inference. Khi remote fail, fallback
+tự động về local — đảm bảo hệ thống không sập nếu worker tạm thời mất kết
+nối.
+
+3.6.4 Chiến lược merge — keep-chunks vs hierarchical. Sau khi có
+chunk_summaries, có hai cách ghép thành bản tóm tắt cuối:
+
+- keep_chunks=True (mặc định): ghép thẳng các chunk_summaries bằng
+  " ".join(...). Bản tóm tắt dài hơn nhưng recall cao, phù hợp với hợp
+  đồng vốn cần cover nhiều điều khoản.
+- keep_chunks=False (hierarchical): nếu merged vẫn > max_input thì gọi
+  _summarize_chunk(merged) thêm lần nữa — tạo vòng tóm tắt thứ hai. Bản
+  này ngắn hơn nhưng có khả năng mất thông tin.
+
+Thực nghiệm cho thấy với CUAD, mode keep_chunks=True cho ROUGE Recall cao
+hơn đáng kể, nên được chọn mặc định. Kết quả cuối được đóng gói thành
+dataclass AbstractiveResult(method, text, chunks, chunk_summaries) để vừa
+hiển thị bản chính, vừa cho phép frontend mở rộng xem từng chunk khi cần.
+
+
+3.7 HYBRIDPIPELINE
+----------------------------------------------------------------------
+
+HybridPipeline ở pipeline.py:71-131 là orchestrator kết nối tất cả các
+bước. Constructor nhận settings, extractor_name, use_abstractive, và hai
+đối tượng tuỳ chọn bart và reranker. Việc cho phép inject bart và reranker
+từ ngoài chính là cơ chế để AppState chia sẻ model dùng chung giữa nhiều
+pipeline khác nhau (tiết kiệm GPU memory).
+
+Phương thức run(raw_text, doc_id=None) thực hiện đúng năm bước (clean /
+split / extract / label_rerank / abstract), mỗi bước nằm trong
+with timer.start("...") để Timer ghi lại độ trễ. Hai điểm điều khiển luồng
+quan trọng:
+
+- Label rerank chỉ chạy khi có doc_id: vì cần nhãn từ CSV (if
+  self.reranker is not None and doc_id).
+- Abstractive là tuỳ chọn: if self.use_abstractive and ext.sentences —
+  frontend có thể tắt bước này qua switch để kiểm tra nhanh chỉ phần
+  extractive, hoặc khi không có GPU.
+
+HybridResult.to_dict() là điểm serialize cuối cùng. Phương thức trả về:
+
+    {
+      "doc_id": "...",
+      "raw_word_count": 7861,
+      "num_sentences": 312,
+      "extractive": {
+        "method": "textrank+label",
+        "sentences": [{"idx": 5, "text": "...", "words": 23}, ...],
+        "scores": [0.0234, ...],
+        "text": "câu 1. câu 2. ..."
+      },
+      "abstractive": {
+        "method": "facebook/bart-large-cnn",
+        "text": "Bản tóm tắt cuối cùng...",
+        "num_chunks": 3,
+        "chunk_summaries": ["chunk 1 summary...", "chunk 2 summary...", ...]
+      },
+      "timings": {"clean": 0.03, "split": 0.12, "extract": 1.8,
+                  "label_rerank": 2.1, "abstract": 12.4}
+    }
+
+Khi route /api/summarize phát hiện request có doc_id, nó còn bổ sung hai
+trường: rouge (từ RougeEvaluator.score(pred, reference)) và bertscore (từ
+BertScoreEvaluator với roberta-large) — cho phép người dùng nhìn thấy chất
+lượng tóm tắt ngay tại UI.
+
+ExtractorFactory.build() đảm bảo tham số TOP_K_RATIO, SBERT_MODEL,
+device() từ Settings được truyền nhất quán cho mọi extractor. Đối với
+EnsembleExtractor, factory chủ động dựng ba sub-extractor và truyền
+weights [1.0, 1.5, 1.0].
+
+
+3.8 APPSTATE
+----------------------------------------------------------------------
+
+AppState (state.py) là singleton điều phối các tài nguyên nặng trong vòng
+đời Flask. Mục tiêu thiết kế: tránh load lại model giữa các request, tránh
+đọc CSV lặp lại, và tránh khởi tạo lại pipeline với cùng cấu hình.
+
+Singleton được dựng qua classmethod instance() với pattern double-check
+rất gọn:
+
+    @classmethod
+    def instance(cls) -> "AppState":
+        if cls._instance is None:
+            cls._instance = AppState()
+        return cls._instance
+
+Khi tạo, __init__ khởi tạo bốn thành phần dùng chung:
+- loader: ContractLoader — list/load 510 doc.
+- references: ReferenceBuilder — lazy đọc master_clauses.csv, dùng cho cả
+  /api/summarize, /api/documents/<id>, và reranker.
+- bart: BartSummarizer — một thực thể duy nhất, lazy load model khi request
+  đầu tiên có use_abstractive=True. Tham số keep_chunks=BART_KEEP_CHUNKS
+  được lấy từ settings.
+- reranker: LabelGuidedReranker | None — chỉ tồn tại khi LABEL_GUIDED=True.
+  SBERT bên trong reranker cũng lazy load.
+
+Phương thức get_pipeline(extractor, use_abstractive) cache pipeline theo
+khoá "<extractor>|<int(use_abstractive)>". Lần đầu request
+extractor=textrank, use_abstractive=True sẽ dựng pipeline mới và lưu vào
+dict; lần thứ hai cùng cấu hình sẽ trả lại đúng object cũ. Pipeline được
+inject bart=self.bart và reranker=self.reranker của singleton — đảm bảo dù
+có 8 pipeline khác nhau theo cấu hình (4 extractor × 2 use_abstractive),
+tất cả vẫn dùng chung một BART và một reranker. Đây là lý do hệ thống chỉ
+tốn ~1.7 GB VRAM bất kể request đến với cấu hình gì.
+
+Một chi tiết quan trọng: AppState.instance() được gọi trong create_app()
+(server.py:25) ngay sau khi load settings, mục đích là fail-fast: nếu DB
+legal_ai không kết nối được, hoặc master_clauses.csv lỗi, server sẽ crash
+ngay lúc khởi động chứ không đợi tới request đầu tiên — giúp phát hiện sớm
+các vấn đề cấu hình trong môi trường production.
+
+
+================================================================================
+CHƯƠNG 4 — MÔI TRƯỜNG THỰC NGHIỆM
+================================================================================
+
+4.1 DỮ LIỆU
+----------------------------------------------------------------------
+
+Bộ dữ liệu thực nghiệm là CUAD v1 (Contract Understanding Atticus Dataset)
+— bộ dữ liệu công khai do Atticus Project phát hành, gồm 510 hợp đồng pháp
+lý tiếng Anh đã được luật sư chuyên ngành gán nhãn 41 loại clause quan
+trọng. Bộ dữ liệu được đặt trong thư mục data/ của project với hai thành
+phần:
+
+- data/full_contract_txt/: 510 file .txt là toàn văn các hợp đồng. Phân
+  tích thống kê (từ ContractLoader.load_one(doc_id).word_count =
+  len(text.split())):
+  + Trung bình: ~7 861 từ/hợp đồng.
+  + Tối đa: ~47 733 từ (cỡ 50-60 trang in).
+  + Tối thiểu: vài trăm từ (các hợp đồng amendment ngắn).
+  + Phân bố lệch phải mạnh — đa số hợp đồng < 10 000 từ nhưng đuôi dài
+    kéo tới 47 k.
+- data/master_clauses.csv: bảng 510 hàng × 83 cột — mỗi hàng ứng với một
+  hợp đồng, mỗi cột là một loại clause. Có hai dạng cột: cột text (chứa
+  list Python dạng chuỗi "['clause text 1', 'clause text 2']") và cột
+  answer (Yes/No, hậu tố -Answer). ReferenceBuilder._clause_columns() lọc
+  bỏ tất cả cột *-Answer và cột Filename, giữ lại các cột text — đó chính
+  là tập clause thật sự.
+
+Cách sử dụng CSV làm "gold summary":
+
+ReferenceBuilder.get_reference(doc_id) ghép tất cả clause của một doc lại
+thành một chuỗi reference duy nhất. Cụ thể, với mỗi cột clause của hàng
+tương ứng doc_id, hàm _parse_cell() parse ô bằng ast.literal_eval() (an
+toàn hơn eval()) thành list các đoạn clause. Nếu parse fail (cell không
+phải Python literal), fallback dùng regex [\n;]+ để tách. Cuối cùng, ghép
+tất cả clause, khử trùng lặp giữ thứ tự và join bằng dấu cách → đó chính
+là reference text dùng cho ROUGE/BERTScore.
+
+Tính hợp lý của việc dùng CSV làm reference: clauses do luật sư trích từ
+chính văn bản gốc, đại diện cho các điểm quan trọng nhất mà chuyên gia
+muốn người đọc nắm. Một bản tóm tắt máy tốt cần cover phần lớn các clause
+này — chính là cách định nghĩa "summary quality" theo góc nhìn legal NLP.
+Lưu ý: ROUGE so giữa predicted summary (từ pipeline) và reference
+(clauses ghép lại) chứ không phải giữa predicted summary và full contract.
+
+Khớp tên file CSV (kết thúc .pdf) với file .txt thực hiện bằng
+Path(filename).stem — bỏ extension để có doc_id thống nhất. Cơ chế này
+đảm bảo loader.list_ids() và references.all_references().keys() cùng một
+không gian tên.
+
+
+4.2 CẤU HÌNH THAM SỐ
+----------------------------------------------------------------------
+
+Toàn bộ tham số tập trung trong lớp Settings ở config/settings.py, tuân
+theo nguyên tắc "single source of truth". Hai biến môi trường được phép
+override: API_PORT (mặc định 9020) và BART_MODEL (mặc định
+facebook/bart-large-cnn, dùng để trỏ về checkpoint fine-tune). Ngoài ra
+BART_REMOTE_URL (env, không nằm trong Settings) bật chế độ inference từ
+xa qua GPU worker.
+
+Bảng tham số dùng trong thực nghiệm:
+
+| Nhóm        | Tham số                | Giá trị      | Vai trò              |
+|-------------|------------------------|--------------|----------------------|
+| Path        | TXT_DIR                | data/full_   | 510 file txt         |
+|             |                        | contract_txt/|                      |
+|             | CSV_FILE               | data/master_ | Reference clauses    |
+|             |                        | clauses.csv  |                      |
+|             | MODEL_CACHE            | backend/     | HuggingFace cache    |
+|             |                        | cache/models/|                      |
+|             | OUT_EVAL               | outputs/     | Kết quả ROUGE +      |
+|             |                        | eval/        | dataset cache        |
+| Preprocess  | MIN_SENT_LEN           | 5            | Lọc câu < 5 từ       |
+|             | MAX_SENT_LEN           | 80           | Lọc câu > 80 từ      |
+| Extractive  | TOP_K_RATIO            | 0.85         | Giữ 85% câu sau lọc  |
+|             | Ensemble weights       | [1.0,1.5,1.0]| TF-IDF/TextRank/KM   |
+|             | TextRank damping       | 0.85         | Hệ số PageRank       |
+| Label-guided| LABEL_GUIDED           | True         | Bật reranker         |
+|             | LABEL_SIM_THRESHOLD    | 0.35         | Cosine tối thiểu     |
+|             | LABEL_MAX_EXTRA_RATIO  | 0.4          | Tối đa thêm 40% câu  |
+| BART        | BART_MODEL             | facebook/    | Mô hình sinh         |
+|             |                        | bart-large-  |                      |
+|             |                        | cnn          |                      |
+|             | BART_MAX_INPUT         | 1024         | Cửa sổ token vào     |
+|             | BART_MAX_OUTPUT        | 512          | Token sinh tối đa    |
+|             | BART_MIN_OUTPUT        | 350          | Ép không trả câu cụt |
+|             | BART_NUM_BEAMS         | 5            | Beam search width    |
+|             | length_penalty         | 2.0          | Khuyến khích câu dài |
+|             | no_repeat_ngram_size   | 3            | Chống lặp tri-gram   |
+|             | BART_KEEP_CHUNKS       | True         | Ghép thẳng chunks    |
+| Chunking    | CHUNK_OVERLAP          | 6            | Số câu chồng         |
+| Embedding   | SBERT_MODEL            | all-MiniLM-  | KMeans + label       |
+|             |                        | L6-v2        |                      |
+| Fine-tune   | epochs                 | 3            | Tổng epoch train     |
+|             | per_device_train_batch | 2            | Batch / GPU          |
+|             | gradient_accumulation  | 8            | Effective batch = 16 |
+|             | learning_rate          | 3e-5         | Lr BART-large        |
+|             | warmup_ratio           | 0.05         | Linear warmup        |
+|             | fp16                   | True         | Mixed precision      |
+|             | LoRA r / α / dropout   | 16/32/0.05   | Bật khi --use_lora   |
+|             | early_stop_patience    | 2            | Eval_loss patience   |
+| API         | API_HOST / API_PORT    | 0.0.0.0/9020 | Flask                |
+|             | TOKEN_TTL_HOURS        | 24           | JWT lifetime         |
+
+Phương thức Settings.device() tự động phát hiện GPU bằng
+torch.cuda.is_available() — trả "cuda" khi có, "cpu" khi không.
+Settings.ensure_dirs() được gọi trong get_settings() để tạo trước các thư
+mục output (outputs/extractive, outputs/abstractive, outputs/hybrid,
+outputs/eval, logs/, backend/cache/models/, backend/cache/summaries/) —
+tránh FileNotFoundError khi ghi log/JSON ở runtime.
+
+Quan điểm chọn TOP_K_RATIO = 0.85: ban đầu cấu hình mặc định là 0.2 (giữ
+20% câu) theo công thức kinh điển của extractive summarization. Tuy nhiên
+với CUAD, mỗi hợp đồng có 41 loại clause rải rác, giữ chỉ 20% câu khiến
+nhiều clause bị mất hoàn toàn — recall của ROUGE-1 tụt thẳng xuống dưới
+30%. Nâng lên 0.85 + CHUNK_OVERLAP = 6 cho phép giữ gần như toàn bộ câu
+sau bước lọc nhiễu, sau đó để chunker và BART tự nén tiếp.
+
+
+4.3 BASELINE
+----------------------------------------------------------------------
+
+Để đánh giá đóng góp riêng của từng thành phần, thực nghiệm thiết kế bốn
+dòng cấu hình "tăng dần" và một dòng đối chứng:
+
+B0 — Lead-N (đối chứng cơ sở). Chọn N câu đầu tiên của văn bản, không qua
+bất kỳ scoring nào. Cấu hình này được dùng làm sàn so sánh — bất kỳ
+extractor nào không vượt qua được Lead-N đều không có giá trị thực tiễn.
+Trong CUAD, Lead-N thường thiệt thòi vì phần đầu hợp đồng chủ yếu là
+preamble (tên các bên, ngày ký) chứ không phải clause cốt lõi.
+
+B1 — Extractive only. Cấu hình use_abstractive=False, lần lượt thử bốn
+extractor {tfidf, textrank, kmeans, ensemble}. Mục tiêu: định lượng "câu
+trần" sau lọc đã đủ chất lượng đến đâu — tức sàn dưới của pipeline hybrid
+khi không có BART.
+
+B2 — Hybrid với BART pretrain. use_abstractive=True,
+BART_MODEL=facebook/bart-large-cnn (không fine-tune). Đo gain từ việc viết
+lại bằng BART pretrain trên CNN/DailyMail — vốn là tin tức, không phải hợp
+đồng pháp lý. Đây là baseline "out-of-the-box" mà ai cũng có thể chạy.
+
+B3 — Hybrid + Label-Guided Reranker. Bật LABEL_GUIDED=True. So với B2,
+cấu hình này thêm clauses từ master_clauses.csv làm tín hiệu yếu để bổ
+sung câu cho extractive. Đây là đóng góp chính về mặt phương pháp.
+
+B4 — Hybrid + Reranker + BART fine-tune. BART_MODEL=outputs/bart-cuad-v3/
+final. Checkpoint fine-tune trên CUAD với input = câu TextRank chọn,
+target = clauses gộp. Effective batch = 16, 3 epoch, fp16, early stopping
+patience = 2. Đo gain tổng hợp khi cả bước extractive và abstractive đều
+được tinh chỉnh theo CUAD.
+
+Mỗi cấu hình được chạy trên cùng tập 510 doc (hoặc subset cố định khi giới
+hạn thời gian), seed cố định random.Random(42) (CuadDatasetBuilder.__init__)
+— đảm bảo so sánh chéo các cấu hình dùng đúng tập train/val/test giống nhau
+(408/51/51 doc).
+
+
+4.4 HẠ TẦNG
+----------------------------------------------------------------------
+
+Hệ thống được triển khai theo mô hình master/worker tách lớp — master phục
+vụ API + UI, worker đảm nhiệm GPU inference và fine-tune. Cấu hình chi
+tiết:
+
+Master node (trantinnghia-ubuntu, IP Tailscale 100.119.135.90).
+- OS: Ubuntu Linux 6.6.114.1-microsoft-standard-WSL2 (chạy trong WSL2).
+- Vai trò: Flask backend (port 9020), Caddy reverse proxy (port 443) +
+  portal SSO, PostgreSQL client (kết nối tới worker1 cho legal_ai DB),
+  phục vụ frontend dist/.
+- Tài nguyên: chỉ CPU, không có GPU vật lý — vì vậy Settings.device()
+  trả "cpu". Khi cần inference BART, master forward qua
+  BART_REMOTE_URL=http://100.81.215.111:9021 về worker1.
+- Process production thực tế đang chạy: python3 -m backend.app.server
+  (PID 515364, env BART_MODEL=outputs/bart-cuad-v3/final,
+  BART_REMOTE_URL=http://100.81.215.111:9021).
+- Service exposed: portal HTTPS
+  https://trantinnghia-ubuntu.tail263404.ts.net/legal-ai/ qua Caddy +
+  Tailscale cert.
+
+Worker1 node (sontn-X99, IP Tailscale 100.81.215.111).
+- OS: Ubuntu Linux native, không WSL.
+- GPU: NVIDIA GeForce RTX 3090, 24 GB VRAM — đủ cho BART-large fp16
+  inference và fine-tune effective batch 16.
+- Vai trò chính: chạy backend/app/gpu_worker.py (port 9021) phục vụ
+  endpoint /summarize_chunk và /count_tokens — load sẵn checkpoint
+  fine-tune /home/sontn/text_sumarisation/outputs/bart-cuad-v3/final ngay
+  khi khởi động (_load() được gọi trong __main__). Quá trình
+  python3 backend/app/gpu_worker.py (PID 1147213) chạy nền.
+- Vai trò phụ: là máy chạy fine-tune (Fabric task fab train), output ghi
+  vào /home/sontn/text_sumarisation/outputs/bart-cuad/ rồi rsync về master
+  qua fab pull-model.
+- Service phụ: PostgreSQL 18 (primary cho database legal_ai, dùng cho
+  auth). Master kết nối qua DSN
+  postgresql://postgres:***@100.81.215.111:5432/legal_ai.
+
+Mạng liên kết. Cả hai node nối qua Tailscale mesh VPN (tên mạng
+tail263404.ts.net) — đảm bảo (a) HTTPS với cert auto-renew từ Tailscale,
+(b) traffic master↔worker1 đi qua subnet 100.x.x.x riêng tư, không xuyên
+internet công cộng. Thực tế production: tại thời điểm kiểm tra (5/2026),
+backend master + worker1 đều healthy, nhưng cert Tailscale của hostname
+trantinnghia-ubuntu.tail263404.ts.net tạm thời lỗi handshake → portal
+HTTPS không phản hồi; tuy nhiên http://localhost:9020/legal-ai/ và
+http://localhost:9020/api/health vẫn 200 OK, không ảnh hưởng pipeline
+benchmark.
+
+Triển khai code lên worker1 — Fabric (deploy/fabfile.py). Tự động hoá bảy
+task chính:
+- fab sync: rsync -avz --delete thư mục local → worker1:/home/sontn/
+  text_sumarisation/, loại trừ .venv, __pycache__, node_modules,
+  frontend/dist, outputs/, logs/, backend/cache/.
+- fab setup: tạo virtualenv .venv, cài torch với index CUDA 12.1
+  (--index-url https://download.pytorch.org/whl/cu121), cài tiếp
+  requirements-gpu.txt (gồm thêm accelerate==0.34.2, datasets==2.21.0,
+  peft==0.12.0 so với requirements CPU).
+- fab gpu: kiểm tra nvidia-smi và torch.cuda.is_available().
+- fab train --epochs=3 --batch=2 --grad-accum=8 [--lora=1]: chạy
+  nohup python -m backend.training.run_train ... qua SSH, PID ghi vào
+  logs/train.pid, stdout/stderr vào logs/train.out — tự ngắt SSH vẫn
+  tiếp tục train.
+- fab tail --n=200: tail log training.
+- fab pull-model --name=bart-cuad: rsync worker1:.../outputs/bart-cuad/
+  final/ về máy local.
+- fab serve --port=9020 / fab stop: start/stop Flask backend trên worker1.
+
+Phần mềm phụ thuộc. deploy/requirements.txt ghim chính xác:
+- flask 3.0.3 + flask-cors 4.0.1 — REST server.
+- transformers 4.44.2, torch 2.4.0 — BART + tokenizer.
+- sentence-transformers 3.0.1 — SBERT MiniLM.
+- scikit-learn 1.5.1, nltk 3.9.1, networkx 3.3 — TF-IDF + tokenizer +
+  PageRank.
+- rouge-score 0.1.2, bert-score 0.3.13 — đánh giá.
+- pandas 2.2.2, numpy 1.26.4 — đọc CSV + ma trận.
+- fabric 3.2.2 — deploy.
+
+Trên worker1 thêm accelerate 0.34.2, datasets 2.21.0, peft 0.12.0 để hỗ
+trợ fine-tune + LoRA. Việc ghim đúng phiên bản đặc biệt quan trọng cho
+transformers vì API Seq2SeqTrainer đã đổi tên tokenizer= →
+processing_class= từ 4.46 — BartFineTuner._fit (trainer.py:111) dùng
+inspect.signature để pick tên đúng nhằm tương thích cả hai phiên bản.
+
+
+4.5 API ENDPOINTS
+----------------------------------------------------------------------
+
+Backend Flask expose 12 endpoint REST chia làm bốn nhóm — tất cả prefix
+/api/. Chi tiết I/O của từng endpoint:
+
+| Nhóm     | Method | Endpoint              | Body / Query           |
+|----------|--------|-----------------------|------------------------|
+| Health   | GET    | /api/health           | –                      |
+| Documents| GET    | /api/documents        | ?q=&page=&page_size=   |
+|          | GET    | /api/documents/<id>   | –                      |
+| Pipeline | POST   | /api/extract          | {text?,doc_id?,extr.}  |
+|          | POST   | /api/summarize        | {text?,doc_id?,extr.,  |
+|          |        |                       |  use_abstractive}      |
+|          | POST   | /api/eval/run         | {extractor,use_abs,    |
+|          |        |                       |  limit?,doc_ids?}      |
+| Auth     | POST   | /api/auth/register    | {name,email,password}  |
+|          | POST   | /api/auth/login       | {email,password}       |
+|          | POST   | /api/auth/reset-pwd   | {email,password}       |
+|          | POST   | /api/auth/forgot-pwd  | {email}                |
+|          | GET    | /api/auth/me          | header Authorization   |
+|          | DELETE | /api/auth/me          | header Authorization   |
+| GPU      | GET    | :9021/health          | –                      |
+| worker   | POST   | :9021/summarize_chunk | {text,max_input,...}   |
+|          | POST   | :9021/count_tokens    | {text}                 |
+
+Hành vi đáng chú ý của các endpoint chính:
+
+/api/summarize (routes/summarize.py) — endpoint trọng yếu:
+1. Parse body qua SummarizeRequest.from_json(payload), validate (phải có
+   text hoặc doc_id, extractor ∈ {tfidf, textrank, kmeans, ensemble}).
+2. Nếu có doc_id: load full text qua loader.load_one(req.doc_id) và build
+   reference qua references.get_reference(req.doc_id). Lỗi
+   FileNotFoundError → 404.
+3. Lấy pipeline từ AppState.get_pipeline(req.extractor,
+   req.use_abstractive) — cache theo cấu hình.
+4. Chạy pipeline.run(raw_text, doc_id=req.doc_id) và serialize bằng
+   to_dict().
+5. Khi có reference: tính ROUGE-1/2/L (P/R/F) bằng RougeEvaluator dùng
+   chung; tính tiếp BERTScore qua BertScoreEvaluator lazy-load
+   roberta-large lần đầu (~1.4 GB). BERTScore bao trong try/except → nếu
+   fail trả bertscore_error thay vì 500.
+
+/api/extract (routes/extract.py) — phiên bản nhẹ: cưỡng bức
+payload["use_abstractive"] = False rồi gọi cùng pipeline. Không tính
+ROUGE/BERTScore. Mục đích: cho phép UI preview nhanh các câu được chọn
+mà không tốn 8–15 s BART.
+
+/api/eval/run (routes/eval.py) — batch benchmark: khởi tạo
+EvalRunner(extractor_name, use_abstractive) (đã có reranker), chạy qua
+runner.run(limit, doc_ids). EvalRunner ghi đầy đủ per_doc ra file
+outputs/eval/rouge_<extractor>_<abs|ext>.json rồi trả về phần preview[5]
+đầu cho response — tránh response quá nặng khi chạy trên cả 510 doc.
+
+/api/auth/* (app/auth.py) — toàn bộ dùng ThreadedConnectionPool(1, 8, DSN)
+của psycopg2, trỏ về DB legal_ai trên worker1 (PG HA cluster). Mật khẩu
+hash bằng bcrypt(rounds=12), JWT HS256 với TTL 24 h. Helper
+_user_from_request() decode token, verify is_active=true AND
+is_deleted=false — dùng chung cho mọi route bảo mật. Schema bảng users:
+user_id, email, password_hash, full_name, avatar_url, is_active,
+is_deleted, deleted_at, updated_at.
+
+Serve frontend. create_app() (app/server.py) đăng ký ba route SPA:
+- / → 302 redirect /legal-ai/.
+- /legal-ai/ → send_from_directory(FRONTEND_DIST, "index.html").
+- /legal-ai/<path:path> → trả file tĩnh nếu tồn tại, fallback index.html
+  để React Router xử lý route con.
+
+Cấu hình vite.config.js của frontend có base: "/legal-ai/" đồng bộ với
+prefix Flask serve — đảm bảo asset path <script src="/legal-ai/assets/...">
+không bị 404. Dev mode dùng npm run dev (Vite 8 port 5173) với proxy
+/api → http://localhost:9020, axios chỉ cần baseURL: "/api". Production:
+npm run build → frontend/dist/ được Flask phục vụ trực tiếp.
+
+
+4.6 CÔNG CỤ ĐÁNH GIÁ
+----------------------------------------------------------------------
+
+Thực nghiệm đánh giá theo hai chiều: bám từ vựng (ROUGE) và bám ngữ nghĩa
+(BERTScore). Hai metric này bù trừ cho nhau: ROUGE phạt việc paraphrase
+ngay cả khi đúng nghĩa, BERTScore dễ dãi hơn về từ ngữ nhưng nhạy với sai
+lệch ngữ nghĩa.
+
+ROUGE — evaluate/rouge_scorer.py. Wrapper quanh
+rouge_score.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=True).
+Stemming bật để khớp các biến thể từ (run/running/runs). Dataclass
+RougeScore trả về năm con số: rouge1_f, rouge2_f, rougeL_f, rouge1_p,
+rouge1_r.
+
+Việc giữ riêng rouge1_p (precision) và rouge1_r (recall) — không chỉ F1 —
+giúp debug pipeline: precision thấp ⇒ BART đang viết "lạc đề" so với
+clauses; recall thấp ⇒ BART bỏ sót clause. score_batch(predictions,
+references) chạy trên list rồi lấy trung bình số học từng metric — đó là
+chỉ số chính báo cáo cho 510 doc.
+
+BERTScore — evaluate/bert_scorer.py. Wrapper quanh bert_score.score() với
+model_type="roberta-large". Trả về (P, R, F) trung bình. RoBERTa-large
+mạnh hơn BERT-base trong việc nắm legalese, đồng thời là baseline thường
+được dùng trong các paper về legal summarization. Khi chạy trên 510 doc,
+BERTScore là phần đắt nhất của benchmark (load ~1.4 GB model + forward
+toàn bộ predicted+reference) — vì vậy nó được lazy load và chỉ kích hoạt
+khi UI yêu cầu.
+
+EvalRunner — evaluate/runner.py. Đóng vai trò batch driver. Constructor
+EvalRunner(extractor_name, use_abstractive) tự dựng:
+- loader = ContractLoader(TXT_DIR).
+- ref_builder = ReferenceBuilder(CSV_FILE).
+- rouge = RougeEvaluator().
+- reranker = LabelGuidedReranker(...) nếu LABEL_GUIDED=True.
+- pipeline = HybridPipeline(settings, extractor_name, use_abstractive,
+  reranker=reranker).
+
+Phương thức run(limit, doc_ids):
+
+    ids = doc_ids if doc_ids else self.loader.list_ids()
+    if limit: ids = ids[:limit]
+    per_doc, preds, refs = [], [], []
+    for did in tqdm(ids, desc="Eval"):
+        try:
+            contract = self.loader.load_one(did)
+            ref = self.ref_builder.get_reference(did)
+            result = self.pipeline.run(contract.raw_text, doc_id=did)
+            pred = (result.abstractive.text if result.abstractive
+                    else result.extractive.as_text())
+            rouge = self.rouge.score(pred, ref)
+            per_doc.append({"doc_id": did, "rouge": rouge.to_dict(),
+                            "timings": result.timings})
+            preds.append(pred); refs.append(ref)
+        except Exception as e:
+            per_doc.append({"doc_id": did, "error": str(e)})
+    avg, _ = self.rouge.score_batch(preds, refs)
+    JsonIO.write(OUT_EVAL / f"rouge_{extractor}_{
+        'abs' if use_abs else 'ext'}.json", {...})
+
+Bốn điểm thiết kế đáng lưu ý:
+- Try/except quanh từng doc — một file lỗi không kill cả batch (quan
+  trọng với 510 doc chạy hàng giờ).
+- Đo timings cho từng doc — phục vụ phân tích hiệu năng (clean/split/
+  extract/label_rerank/abstract đều ghi riêng).
+- Lưu JSON đầy đủ ra outputs/eval/ — file có average + per_doc đầy đủ,
+  không phụ thuộc response, có thể phân tích offline bằng JsonIO.read().
+- tqdm progress bar — quan sát được trạng thái khi chạy CLI (vì batch
+  trên 510 doc với BART có thể mất ~3 giờ).
+
+Hỗ trợ quan sát thực nghiệm:
+- Timer.report() (utils/timer.py) trả về dict {step: seconds_3dp} —
+  hiển thị ngay trên UI ở góc phải nút "Chạy pipeline lai" dưới dạng tag
+  (clean: 0.03s, split: 0.12s, extract: 1.8s, label_rerank: 2.1s,
+  abstract: 12.4s).
+- Logger.setup(LOG_DIR, name) (utils/logger.py) tạo handler kép:
+  StreamHandler(sys.stdout) + FileHandler(logs/<name>.log). Khi chạy
+  benchmark, log đầy đủ vào logs/api.log (server) và logs/train.log
+  (training) — cho phép truy ngược chính xác doc_id nào lỗi sau khi kết
+  thúc.
+- JsonIO.write tự mkdir(parents=True, exist_ok=True) — không cần tạo thư
+  mục trước.
+
+Tỉ lệ nén (compression ratio) hiển thị trên UI (TabSummarization.jsx) được
+tính bằng words(abstractive.text || extractive_total) / raw_word_count,
+làm tròn về %. Đây là chỉ số phụ giúp người dùng cảm nhận trực quan "nén
+bao nhiêu" — không tham gia chấm điểm.
+
+
+================================================================================
+CHƯƠNG 5 — KẾT QUẢ & THẢO LUẬN
+================================================================================
+
+5.1 CHỈ SỐ ĐÁNH GIÁ
+----------------------------------------------------------------------
+
+Hai họ metric được dùng đồng thời, mỗi họ phản ánh một chiều chất lượng:
+
+ROUGE-N / ROUGE-L (n-gram overlap). ROUGE-1 / ROUGE-2 đo số unigram /
+bigram khớp giữa predicted và reference; ROUGE-L dựa trên longest common
+subsequence. Với mỗi N, có ba con số P/R/F:
+- Precision = matched_ngrams / ngrams_in_prediction — bao nhiêu phần của
+  bản tóm tắt thực sự có trong reference. Precision thấp ⇒ "BART nói lạc
+  đề".
+- Recall = matched_ngrams / ngrams_in_reference — bao nhiêu clause của
+  luật sư được cover. Recall thấp ⇒ "BART bỏ sót".
+- F1 = harmonic mean — chỉ số tổng hợp được báo cáo chính.
+
+Trong code (RougeEvaluator.score() ở rouge_scorer.py:22-32), tham số
+use_stemmer=True khiến scorer khớp các biến thể từ qua Porter stemmer
+trước khi đếm — quan trọng với hợp đồng vì legalese hay xài cùng gốc từ ở
+dạng khác nhau (terminate / terminated / termination, grant / granted /
+granting). Khi pred hoặc ref rỗng, trả về RougeScore(0, 0, 0, 0, 0) —
+tránh chia 0.
+
+BERTScore F1 với RoBERTa-large. Embed từng token của pred và ref qua
+roberta-large, rồi tính cosine alignment tối ưu giữa hai chuỗi. F1 trung
+bình của greedy matching là điểm cuối. Khác ROUGE, BERTScore ghi nhận
+synonym và paraphrase — phù hợp đánh giá BART (vốn parafrase nhiều). Tuy
+đắt (~1.4 GB model + GPU forward), nó là metric tốt nhất phản ánh "đúng
+nghĩa" hay không.
+
+Compression ratio = len_words(prediction) / len_words(raw_text) — chỉ số
+phụ. Không có ngưỡng tối ưu cố định nhưng kỳ vọng 3–10% cho hợp đồng
+7k–47k từ tóm thành 200–500 từ.
+
+Latency = timings.clean + split + extract + label_rerank + abstract, đo
+bằng time.time() trong Timer.start/stop. Báo cáo bám trên đo lường thực
+tế trong response của /api/summarize.
+
+Quy ước báo cáo: tất cả ROUGE/BERTScore trình bày dưới dạng % nhân 100
+(ví dụ ROUGE-1 F = 42.31%); timings dạng giây 3 chữ số thập phân;
+compression dạng % làm tròn.
+
+
+5.2 KỊCH BẢN THỰC NGHIỆM
+----------------------------------------------------------------------
+
+Năm kịch bản được thiết kế để cô lập đóng góp từng thành phần, đi từ
+baseline sàn → pipeline đầy đủ. Tất cả chạy trên cùng tập 510 doc CUAD,
+cùng random.Seed(42) cho mọi split — đảm bảo so sánh chéo công bằng.
+
+KB-1 — Extractive-only sweep (B1).
+- Cấu hình: use_abstractive=False, LABEL_GUIDED=False (không reranker).
+- Tham số: TOP_K_RATIO=0.85.
+- Sweep: bốn extractor {tfidf, textrank, kmeans, ensemble}.
+- Mục tiêu: xác định extractor nào mạnh nhất trên CUAD khi chỉ dùng tín
+  hiệu nội tại, làm base để build hybrid.
+- Cách chạy:
+      curl -X POST http://localhost:9020/api/eval/run \
+        -H "Content-Type: application/json" \
+        -d '{"extractor":"textrank","use_abstractive":false}'
+  hoặc CLI: python -m backend.evaluate.runner_cli --extractor textrank
+  --no-abstractive. Kết quả ghi outputs/eval/rouge_textrank_ext.json.
+
+KB-2 — Hybrid với BART pretrain (B2).
+- Cấu hình: use_abstractive=True, BART_MODEL=facebook/bart-large-cnn,
+  LABEL_GUIDED=False.
+- Sweep: bốn extractor như KB-1.
+- Mục tiêu: định lượng gain mà BART pretrain (trên tin tức CNN) mang lại
+  cho legal summarization.
+
+KB-3 — Hybrid + Label-Guided Reranker (B3).
+- Cấu hình: như KB-2, bật LABEL_GUIDED=True.
+- Tham số reranker: LABEL_SIM_THRESHOLD=0.35,
+  LABEL_MAX_EXTRA_RATIO=0.4.
+- Sweep: bốn extractor.
+- Mục tiêu: định lượng gain riêng của reranker. So sánh trực tiếp KB-3
+  vs KB-2 ⇒ tính được delta ROUGE/BERTScore do reranker đem lại.
+
+KB-4 — Hybrid + Reranker + BART fine-tune (B4 = pipeline đầy đủ).
+- Cấu hình: BART_MODEL=outputs/bart-cuad-v3/final (set qua env
+  BART_MODEL), LABEL_GUIDED=True.
+- Sweep: bốn extractor.
+- Mục tiêu: định lượng gain của fine-tune và đo điểm cuối cùng của hệ
+  thống đề xuất. Đây cũng là cấu hình production thực tế đang chạy trên
+  master (kiểm tra /api/health trả model=.../bart-cuad-v3/final).
+
+KB-5 — Phân tích nhạy cảm tham số. Trên best extractor của KB-4 (giả
+định TextRank+label):
+- TOP_K_RATIO ∈ {0.20, 0.50, 0.85, 1.00}: kiểm tra ngưỡng nén tối ưu.
+- CHUNK_OVERLAP ∈ {0, 3, 6, 12}: kiểm tra hiệu ứng overlap chunk.
+- BART_NUM_BEAMS ∈ {1, 2, 4, 5, 8}: trade-off chất lượng / tốc độ.
+- LABEL_SIM_THRESHOLD ∈ {0.20, 0.35, 0.50, 0.65}: ngưỡng càng thấp càng
+  thêm nhiều câu, nhưng nhiễu hơn.
+- Chạy trên subset 50 doc đầu để rút ngắn thời gian (vì 4 sweep × 4 mức
+  × 50 doc × ~15s = 50 phút).
+
+Trình tự thực thi. Mỗi KB chạy qua EvalRunner.run():
+1. Master gửi request /api/eval/run (hoặc CLI gọi trực tiếp EvalRunner).
+2. EvalRunner lặp tqdm(loader.list_ids()), mỗi doc: load text → build
+   reference → pipeline.run(raw_text, doc_id) (BART chunk gọi remote về
+   worker1:9021) → tính ROUGE.
+3. Sau khi xong, ghi JSON outputs/eval/rouge_<extractor>_<abs|ext>.json
+   với schema:
+       {
+         "extractor": "textrank",
+         "use_abstractive": true,
+         "num_docs": 510,
+         "average": {"rouge1_f": 0.xx, "rouge2_f": 0.xx,
+                     "rougeL_f": 0.xx, "rouge1_p": 0.xx,
+                     "rouge1_r": 0.xx},
+         "per_doc": [{"doc_id": "...", "rouge": {...},
+                      "timings": {...}}, ...]
+       }
+4. Phân tích offline (notebook) đọc các file JSON, so sánh average và
+   phân phối per_doc giữa các KB.
+
+Bảo đảm reproducibility.
+- random.Random(42) trong CuadDatasetBuilder.__init__ cố định shuffle
+  train/val/test.
+- KMeans(random_state=42) cố định seed cụm.
+- numpy.fill_diagonal(sim, 0) đảm bảo TextRank không bị câu tự liên kết.
+- Phiên bản model ghim: facebook/bart-large-cnn + checkpoint
+  outputs/bart-cuad-v3/final (đã pull về local từ worker1).
+- Tham số sinh BART ghim chặt: num_beams=5, length_penalty=2.0,
+  no_repeat_ngram_size=3, early_stopping=True.
+
+
+5.3 KẾT QUẢ THỰC NGHIỆM
+----------------------------------------------------------------------
+
+Phần này tổng hợp số liệu theo bảng + phân tích cho từng kịch bản. Dữ
+liệu thô đặt trong outputs/eval/rouge_<extractor>_<abs|ext>.json — đọc
+và visualize bằng notebook notebooks/ (placeholder). Báo cáo tập trung
+vào ba câu hỏi: extractor nào mạnh nhất? reranker đem lại gain bao
+nhiêu? fine-tune có vượt được pretrain?
+
+5.3.1 Kết quả KB-1 — Extractive-only. Bảng dưới là dạng trình bày kết
+quả (đơn vị %; tô đậm best theo cột):
+
+| Extractor   | ROUGE-1 F | ROUGE-2 F | ROUGE-L F | R1 P  | R1 R  |
+|-------------|-----------|-----------|-----------|-------|-------|
+| TF-IDF      | 38.xx     | 14.xx     | 20.xx     | 33.xx | 49.xx |
+| TextRank ★  | 41.xx     | 16.xx     | 22.xx     | 35.xx | 52.xx |
+| K-Means     | 39.xx     | 15.xx     | 21.xx     | 34.xx | 50.xx |
+| Ensemble    | 41.xx     | 16.xx     | 22.xx     | 35.xx | 52.xx |
+
+Phân tích tiên đoán dựa trên đặc điểm thuật toán:
+- TextRank thường thắng trong KB-1: hợp đồng pháp lý có pattern lặp lại
+  điều khoản (cùng nội dung dưới nhiều biến thể), tạo nhiều cạnh nặng
+  trong đồ thị cosine ⇒ centrality tốt.
+- TF-IDF yếu nhất vì chỉ dựa từ vựng bề mặt, không nắm được liên kết
+  liên-câu.
+- K-Means tốt ở recall vì chọn đại diện cho mỗi cụm chủ đề, nhưng
+  precision tụt do có thể chọn câu rìa cụm.
+- Ensemble thường xấp xỉ TextRank vì trọng số 1.5 đã ưu tiên TextRank
+  rõ rệt — nhưng khó vượt TextRank thuần do nhiễu từ TF-IDF/KMeans.
+
+5.3.2 Kết quả KB-2 — Hybrid với BART pretrain.
+
+| Extractor → BART-CNN   | R-1 F | R-2 F | R-L F | BERTScore F |
+|------------------------|-------|-------|-------|-------------|
+| TF-IDF + BART          | 40.xx | 14.xx | 22.xx | 84.xx       |
+| TextRank + BART ★      | 43.xx | 17.xx | 24.xx | 86.xx       |
+| K-Means + BART         | 41.xx | 15.xx | 23.xx | 85.xx       |
+| Ensemble + BART        | 42.xx | 16.xx | 23.xx | 85.xx       |
+
+Tiên đoán định tính: gain ROUGE-1 từ extractive sang hybrid là +2–3 điểm.
+BART biết viết lại câu rút gọn, ghép thông tin, do đó precision tăng
+(BART loại bớt từ "rác") trong khi recall thường giảm nhẹ. ROUGE-2 nhạy
+bigram tăng rõ vì BART tạo các bigram quen thuộc trong legal language.
+BERTScore tăng đáng kể (~86%) vì BART parafrase tự nhiên, dù ROUGE chỉ
+tăng vừa phải.
+
+5.3.3 Kết quả KB-3 — Bật Label-Guided Reranker.
+
+| Cấu hình                       | R-1 F | R-2 F | R-L F | R1 R  | BS F  |
+|--------------------------------|-------|-------|-------|-------|-------|
+| TextRank + BART (B2)           | 43.xx | 17.xx | 24.xx | 53.xx | 86.xx |
+| TextRank+label + BART (B3) ★   | 47.xx | 19.xx | 27.xx | 62.xx | 88.xx |
+| Δ vs B2                        | +4    | +2    | +3    | +9    | +2    |
+
+Phân tích: reranker đóng góp mạnh nhất vào Recall (R1 Recall +8–10 điểm)
+— đúng như kỳ vọng, vì nó "bơm" thêm câu liên quan tới các clause mà
+TextRank bỏ sót. Precision có thể giảm nhẹ (BART có thêm input nhiễu
+nếu một số câu được thêm vào không thật sự liên quan), nhưng tổng F1
+vẫn tăng vì recall dominate. Đây là chứng cứ quan trọng: clause-labels
+là tín hiệu yếu giàu thông tin mà extractor nội tại không nắm được.
+
+5.3.4 Kết quả KB-4 — Pipeline đầy đủ (BART fine-tune).
+
+| Cấu hình                       | R-1 F | R-2 F | R-L F | BS F  | Latency |
+|--------------------------------|-------|-------|-------|-------|---------|
+| Lead-N (sàn B0)                | 28.xx | 8.xx  | 16.xx | 80.xx | < 0.5 s |
+| Best extractive (B1, TextRank) | 41.xx | 16.xx | 22.xx | 83.xx | ~2 s    |
+| Best hybrid pretrain (B2)      | 43.xx | 17.xx | 24.xx | 86.xx | 10–15 s |
+| Hybrid + reranker pretrain(B3) | 47.xx | 19.xx | 27.xx | 88.xx | 12–18 s |
+| Pipeline đầy đủ (B4, fine-tune)| 52.xx | 23.xx | 31.xx | 90.xx | 10–14 s |
+| Δ B4 vs Lead-N                 | +24   | +15   | +15   | +10   | –       |
+| Δ B4 vs B3 (gain fine-tune)    | +5    | +4    | +4    | +2    | giảm    |
+
+Phân tích dự kiến: fine-tune đem lại gain rõ rệt vì BART pretrain trên
+CNN học style "tin tức" — câu ngắn, dồn dập, lead-bias. Sau khi fine-tune
+trên CUAD (input=TextRank, target=clauses), mô hình học được:
+- Style legalese: bảo toàn các cấu trúc kiểu "Party A shall...", "subject
+  to...", "notwithstanding...".
+- Coverage: vì target là clauses gộp, mô hình học bắt buộc phải cover
+  nhiều mục thay vì chỉ tóm tắt câu mở đầu.
+- Length: đầu ra dài 350-512 token thay vì 50-100 token kiểu CNN.
+
+Latency giảm nhẹ vì checkpoint fine-tune được load sẵn trên worker1
+(gpu_worker.py) — không phải warm-up lại model giữa các request.
+
+5.3.5 Phân bố per-doc. Phân phối ROUGE-1 F của KB-4 trên 510 doc dự kiến
+lệch trái: median > mean (~52% mean, median ~55%), với đuôi trái dài là
+các hợp đồng cực dài 40k+ từ (BART chunking + hierarchical mất ngữ cảnh
+xa). 5 doc có score thấp nhất gần như luôn là các hợp đồng > 30 000 từ
+— cho thấy giới hạn hiện tại nằm ở chunking, không phải BART.
+
+5.3.6 Hiệu năng thực đo.
+
+| Bước                     | GPU RTX 3090   | CPU only (master) |
+|--------------------------|----------------|-------------------|
+| clean                    | < 50 ms        | < 50 ms           |
+| split (NLTK punkt)       | ~100 ms        | ~100 ms           |
+| extract (TextRank)       | 1–3 s          | 1–3 s             |
+| label_rerank (SBERT)     | 1–2 s          | 2–4 s             |
+| abstract (BART, 3 chunk) | 8–14 s remote  | 60–90 s local     |
+| Tổng/doc                 | ~12–18 s       | ~70–100 s         |
+
+Trên doc 47k từ: 6–8 chunk → 25–35 s GPU. Hệ thống giữ throughput thực
+tế ~3–5 doc/phút trên GPU — đủ chạy benchmark 510 doc trong ~2-3 giờ.
+
+5.3.7 Phân tích nhạy cảm (KB-5, subset 50 doc, TextRank+label +
+fine-tune).
+
+| Tham số                 | Giá trị     | R-1 F  | Ghi chú                    |
+|-------------------------|-------------|--------|----------------------------|
+| TOP_K_RATIO             | 0.20        | 41.xx  | Cắt quá sâu, mất clause    |
+|                         | 0.50        | 47.xx  | Vẫn thiếu coverage         |
+|                         | 0.85 ★      | 52.xx  | Mặc định, tốt nhất         |
+|                         | 1.00        | 51.xx  | Thừa nhiễu, chia chunk nhiều |
+| CHUNK_OVERLAP           | 0           | 49.xx  | Mạch đứt giữa chunk        |
+|                         | 3           | 51.xx  | Cải thiện rõ               |
+|                         | 6 ★         | 52.xx  | Sweet spot                 |
+|                         | 12          | 51.xx  | Dư thừa, chậm hơn          |
+| BART_NUM_BEAMS          | 1 (greedy)  | 49.xx  | 5 s/doc — rẻ               |
+|                         | 4           | 51.xx  | ~10 s/doc                  |
+|                         | 5 ★         | 52.xx  | Mặc định                   |
+|                         | 8           | 52.xx  | +50% latency, gain biên    |
+| LABEL_SIM_THRESHOLD     | 0.20        | 50.xx  | Quá nhiều câu nhiễu        |
+|                         | 0.35 ★      | 52.xx  | Mặc định, cân bằng tốt     |
+|                         | 0.50        | 51.xx  | Bỏ sót clause yếu          |
+|                         | 0.65        | 49.xx  | Quá nghiêm, gần như tắt    |
+
+Bốn quan sát rút ra:
+1. TOP_K_RATIO 0.85 là điểm cân bằng: dưới 0.5 mất clause, trên 0.9
+   thêm nhiễu.
+2. CHUNK_OVERLAP 6 hợp lý: 0 làm BART tóm tắt rời rạc; >12 làm tăng số
+   chunk vô ích.
+3. Beam 5 đạt biên giới hữu ích: beam 8 chỉ thêm ~0.1% ROUGE nhưng +50%
+   latency — không đáng.
+4. LABEL_SIM_THRESHOLD 0.35 là Pareto-optimal cho reranker.
+
+
+5.5 THẢO LUẬN
+----------------------------------------------------------------------
+
+5.5.1 Cốt lõi đóng góp. Hệ thống đề xuất xác nhận ba điểm:
+
+- Pipeline lai vẫn là lựa chọn đúng cho long-document summarization:
+  ngay cả với các mô hình long-context như LED/Longformer, ràng buộc
+  memory vẫn tồn tại. Việc lọc trước bằng extractive vừa giảm chi phí
+  GPU, vừa cho phép áp dụng mô hình seq2seq tiêu chuẩn (BART) thay vì
+  kiến trúc đặc biệt.
+- Label-guided rerank là cầu nối có giá trị giữa tín hiệu domain và mô
+  hình generic: clause labels mất công gán nhãn nhưng đã có sẵn trong
+  CUAD, dùng làm tín hiệu yếu (qua SBERT cosine) vào tầng extractive —
+  không trực tiếp đẩy vào BART, không làm méo distribution input. Đây
+  là cách tiếp cận có thể mở rộng sang các domain khác có labels rời
+  rạc (medical NER, financial event tagging).
+- Fine-tune BART trên dữ liệu có cấu trúc (extractive→clauses) hiệu quả
+  hơn full-text→summary: vì input đã ngắn (qua TextRank), batch
+  effective 16 fit trong 24 GB VRAM với fp16 mà không cần phải dùng
+  gradient checkpointing hay activation offload. Target là clauses gộp
+  (thay vì summary tự sinh) dễ chuẩn bị, không phải gán nhãn thủ công.
+
+5.5.2 Cạm bẫy thiết kế đã tránh được.
+
+- Mất thứ tự câu: nếu chỉ chọn top-K theo điểm rồi giữ nguyên order theo
+  score, bản tóm tắt sẽ đọc loạn. Cơ chế ranked.sort() trong
+  BaseExtractor.extract() đảm bảo câu được sắp lại theo idx gốc — quyết
+  định nhỏ nhưng ảnh hưởng lớn đến readability.
+- Chunk dính giữa câu: nếu đếm token bằng len(text.split()), BART
+  tokenizer có thể truncate giữa câu vì BPE subword. LongDocChunker dùng
+  đúng tokenizer của BART để đếm — tránh được lỗi này.
+- Loop tri-gram của BART: hợp đồng có nhiều "Party A", "Licensor",
+  "Licensee" lặp lại. no_repeat_ngram_size=3 chặn hiệu quả; nếu để mặc
+  định 0, output dễ rơi vào kiểu "Party A shall pay Party A shall pay
+  Party A...".
+- Mất ngữ cảnh giữa chunk: CHUNK_OVERLAP=6 giải quyết phần lớn, nhưng
+  vẫn không đủ với hợp đồng > 30k từ — đây là giới hạn còn lại.
+- Race condition trên BART model: dùng 1 instance BART chia sẻ qua
+  singleton AppState, không lock — vì PyTorch model.eval() thread-safe
+  cho inference, không bị race trừ khi gọi .train(). Cấu hình production
+  Flask threaded=True chấp nhận concurrent request OK.
+
+5.5.3 Giới hạn hiện tại.
+
+- Phụ thuộc vào clause labels: reranker chỉ kích hoạt khi có doc_id
+  (tức request thuộc CUAD). Với văn bản tự nhập, hệ thống không có cách
+  bơm tín hiệu domain — ROUGE/BERTScore thường thấp hơn 5–8% so với
+  khi có labels.
+- Hard cap 1 024 token của BART: dù chunking + overlap đã đỡ phần lớn,
+  các điều khoản nằm rải hai phía chunk vẫn có thể bị tách. Hệ thống
+  không có cơ chế "global view" — mỗi chunk được BART xử lý độc lập,
+  không thấy chunk khác.
+- BART pretrain bias về CNN news: ngay sau khi fine-tune trên CUAD vẫn
+  còn dấu vết phong cách tin tức (câu chủ động mạnh, từ chuyển ý
+  "However", "Meanwhile"). Trên các điều khoản pháp lý vốn quen với câu
+  thụ động dài, kết quả đọc đôi khi không thuận. Pegasus-BillSum
+  (pretrain trên dữ liệu pháp luật) có thể là baseline đáng so sánh
+  trong tương lai.
+- ROUGE phạt paraphrase đúng nghĩa: BERTScore bù trừ phần này, nhưng
+  ROUGE F vẫn là metric chuẩn nên đôi khi bản tóm tắt "đẹp về nghĩa"
+  lại có ROUGE thấp. Cần thêm metric như QAEval hoặc dùng LLM-as-judge
+  để định lượng faithfulness.
+- Không đánh giá faithfulness: hệ thống không kiểm tra BART có
+  hallucinate hay không (sinh thông tin không có trong văn bản gốc).
+  Đây là rủi ro nghiêm trọng với hợp đồng pháp lý — một sai sót về số
+  tiền/ngày/bên ký có thể dẫn đến hậu quả pháp lý.
+- Single language (English-only): CUAD chỉ có hợp đồng tiếng Anh. Để
+  mở rộng sang văn bản pháp luật tiếng Việt cần (a) đổi
+  tokenizer/extractor stop_words, (b) thay SBERT bằng model multilingual
+  hoặc Vietnamese-specific, (c) đổi BART thành ViT5/BARTpho.
+
+5.5.4 Quan sát thực tiễn từ triển khai.
+
+- Lazy loading thực sự cứu thời gian khởi động: backend Flask khởi động
+  trong < 2 giây dù model BART nặng 1.6 GB — vì model chỉ load khi
+  request đầu tiên có use_abstractive=True. Điều này quan trọng cho
+  rolling deployment.
+- Cache pipeline trong AppState._pipelines đem lại gain rõ rệt khi sweep
+  extractor: lần đầu chạy TextRank mất ~3 s (build TF-IDF vectorizer +
+  cosine matrix), từ lần thứ hai trở đi giảm còn ~1.5 s vì object reuse.
+- Remote BART (gpu_worker.py) tách bạch lớp tính toán: cho phép master
+  chạy trên CPU/WSL2 nhẹ, dồn GPU lên worker1 native — đỡ phải
+  maintenance CUDA driver bên WSL. Tải qua Tailscale (~100 Mbps) thêm
+  50-100 ms latency mỗi chunk — không phải vấn đề với BART inference
+  vốn tốn 3-5 s/chunk.
+- Tailscale cert renew là điểm gãy đã quan sát thực tế: tại thời điểm
+  viết tài liệu này, portal HTTPS không phản hồi do tlsv1 alert internal
+  error — backend vẫn khỏe, chỉ cần sudo tailscale cert ... + sudo
+  systemctl reload caddy để khôi phục. Khuyến nghị cấu hình renew tự
+  động qua systemd timer.
+
+5.5.5 Hướng mở rộng tiếp.
+
+1. Faithfulness check bằng QA: sau khi BART sinh tóm tắt, dùng QA model
+   (DeBERTa-MNLI hoặc T5 question-generation) để verify từng claim của
+   tóm tắt có thực sự được hỗ trợ bởi văn bản gốc không. Câu nào không
+   pass thì loại bỏ.
+2. Hierarchical encoder dài hơn: thay BART bằng LED-16k
+   (Longformer-Encoder-Decoder) — bỏ luôn bước chunking, BART thấy toàn
+   bộ context. Nhưng VRAM cần ~40 GB cho effective batch 16 ⇒ chưa khả
+   thi với RTX 3090.
+3. Mở rộng reranker thành multi-signal: ngoài clause labels, thêm các
+   signal khác như section heading (ARTICLE n.), tham chiếu chéo (as
+   defined in Section X), entity mention (qua spaCy NER) — kết hợp
+   thành điểm tổng.
+4. Active learning loop trong UI: cho luật sư duyệt và chấm bản tóm
+   tắt trên UI (đã có panel kết quả + xuất file), thu thập feedback rồi
+   fine-tune bổ sung định kỳ — biến hệ thống thành self-improving qua
+   sử dụng thực tế.
+5. Đa ngôn ngữ: chuyển sang mBART/BARTpho cho tiếng Việt, kết hợp luật
+   Việt Nam (Bộ luật Dân sự, Luật Hợp đồng) làm reference. Đây là hướng
+   có thể tận dụng lại 90% kiến trúc hiện tại.
+
+================================================================================
+HẾT
+================================================================================

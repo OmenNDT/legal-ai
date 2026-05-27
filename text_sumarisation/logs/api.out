@@ -1,0 +1,165 @@
+ * Serving Flask app 'server'
+ * Debug mode: off
+INFO:werkzeug:[31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:9020
+ * Running on http://192.168.71.159:9020
+INFO:werkzeug:[33mPress CTRL+C to quit[0m
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 17:10:52] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 17:13:04] "[33mGET /api/docs HTTP/1.1[0m" 404 -
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+WARNING:huggingface_hub.utils._http:Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Loading weights:   0%|          | 0/103 [00:00<?, ?it/s]Loading weights:  64%|██████▍   | 66/103 [00:00<00:00, 657.77it/s]Loading weights: 100%|██████████| 103/103 [00:00<00:00, 790.30it/s]
+[1mBertModel LOAD REPORT[0m from: sentence-transformers/all-MiniLM-L6-v2
+Key                     | Status     |  | 
+------------------------+------------+--+-
+embeddings.position_ids | UNEXPECTED |  | 
+
+[3mNotes:
+- UNEXPECTED[3m	:can be ignored when loading from different task/architecture; not ok if you expect identical arch.[0m
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 17:49:46] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 17:52:00] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 17:52:26] "GET /legal-ai/ HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 17:56:37] "[32mGET / HTTP/1.1[0m" 302 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 17:56:37] "GET /legal-ai/ HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 17:56:37] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 17:56:37] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:02:48] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:02:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:02:57] "GET /legal-ai/ HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:02:57] "[36mGET /legal-ai/assets/index-3czeQ9yJ.css HTTP/1.1[0m" 304 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:02:58] "[36mGET /legal-ai/assets/index-BvD3c7zD.js HTTP/1.1[0m" 304 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:02:59] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:02:59] "GET /api/documents?q=&page=1&page_size=100 HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:03:02] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:03:05] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:03:07] "[32mGET / HTTP/1.1[0m" 302 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:03:07] "GET /legal-ai/ HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:03:08] "[36mGET /legal-ai/assets/index-BvD3c7zD.js HTTP/1.1[0m" 304 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:03:08] "[36mGET /legal-ai/assets/index-3czeQ9yJ.css HTTP/1.1[0m" 304 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:03:11] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:03:11] "GET /api/documents?q=&page=1&page_size=100 HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:03:16] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:03:26] "GET /api/health HTTP/1.1" 200 -
+Loading weights:   0%|          | 0/103 [00:00<?, ?it/s]Loading weights:  54%|█████▍    | 56/103 [00:00<00:00, 555.57it/s]Loading weights: 100%|██████████| 103/103 [00:00<00:00, 775.94it/s]
+[1mBertModel LOAD REPORT[0m from: sentence-transformers/all-MiniLM-L6-v2
+Key                     | Status     |  | 
+------------------------+------------+--+-
+embeddings.position_ids | UNEXPECTED |  | 
+
+[3mNotes:
+- UNEXPECTED[3m	:can be ignored when loading from different task/architecture; not ok if you expect identical arch.[0m
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:03:36] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:03:42] "POST /api/summarize HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:03:46] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:03:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:03:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:04:06] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:04:16] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:04:48] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:04:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:05:48] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:05:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:06:48] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:06:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:07:37] "POST /api/summarize HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:07:48] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:07:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:07:56] "POST /api/summarize HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:08:48] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:08:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:09:48] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:09:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:10:48] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:10:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:11:48] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:11:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:12:48] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:12:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:13:48] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:13:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:14:48] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:14:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:15:48] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:15:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:16:48] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:16:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:17:48] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:17:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:18:48] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:18:56] "GET /api/health HTTP/1.1" 200 -
+Loading weights:   0%|          | 0/103 [00:00<?, ?it/s]Loading weights:  72%|███████▏  | 74/103 [00:00<00:00, 736.21it/s]Loading weights: 100%|██████████| 103/103 [00:00<00:00, 947.02it/s]
+[1mBertModel LOAD REPORT[0m from: sentence-transformers/all-MiniLM-L6-v2
+Key                     | Status     |  | 
+------------------------+------------+--+-
+embeddings.position_ids | UNEXPECTED |  | 
+
+[3mNotes:
+- UNEXPECTED[3m	:can be ignored when loading from different task/architecture; not ok if you expect identical arch.[0m
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:19:48] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:19:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:20:13] "POST /api/summarize HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:20:48] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:20:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:21:35] "POST /api/summarize HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:21:48] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:21:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:22:37] "[36mGET /legal-ai/ HTTP/1.1[0m" 304 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:22:37] "[36mGET /legal-ai/assets/index-BvD3c7zD.js HTTP/1.1[0m" 304 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:22:37] "[36mGET /legal-ai/assets/index-3czeQ9yJ.css HTTP/1.1[0m" 304 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:22:37] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:22:37] "GET /api/documents?q=&page=1&page_size=100 HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:22:48] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:22:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:23:05] "POST /api/summarize HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:23:48] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:23:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:24:05] "POST /api/summarize HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:24:48] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:24:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:25:09] "[36mGET /legal-ai/ HTTP/1.1[0m" 304 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:25:10] "[36mGET /legal-ai/assets/index-BvD3c7zD.js HTTP/1.1[0m" 304 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:25:10] "[36mGET /legal-ai/assets/index-3czeQ9yJ.css HTTP/1.1[0m" 304 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:25:10] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:25:10] "GET /api/documents?q=&page=1&page_size=100 HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:25:48] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:25:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:26:48] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:26:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:27:45] "POST /api/summarize HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:27:48] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:27:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:28:27] "POST /api/summarize HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:28:47] "POST /api/summarize HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:28:48] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:28:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:29:04] "POST /api/summarize HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:29:23] "POST /api/summarize HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:29:48] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:29:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:30:48] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:30:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:31:48] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:31:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:32:34] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:32:37] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:32:47] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:32:48] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:32:57] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:33:07] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:33:17] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:33:27] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:33:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:34:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:35:11] "[36mGET /legal-ai/ HTTP/1.1[0m" 304 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:35:11] "[36mGET /legal-ai/assets/index-BvD3c7zD.js HTTP/1.1[0m" 304 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:35:11] "[36mGET /legal-ai/assets/index-3czeQ9yJ.css HTTP/1.1[0m" 304 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:35:12] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:35:12] "GET /api/documents?q=&page=1&page_size=100 HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:35:14] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:35:15] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:35:26] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:35:36] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:35:46] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:35:56] "GET /api/health HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [26/May/2026 18:35:56] "GET /api/health HTTP/1.1" 200 -
