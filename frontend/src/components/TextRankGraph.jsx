@@ -76,6 +76,13 @@ const TextRankGraph = ({ graph }) => {
         disp[e.source].x -= fx; disp[e.source].y -= fy;
         disp[e.target].x += fx; disp[e.target].y += fy;
       });
+      // Lực gravity nhẹ kéo tất cả nút về center (giữ nút cô lập không bay góc)
+      nodes.forEach((n) => {
+        const dx = cx - pos[n.id].x;
+        const dy = cy - pos[n.id].y;
+        disp[n.id].x += dx * 0.02;
+        disp[n.id].y += dy * 0.02;
+      });
       // Giới hạn dịch chuyển theo temperature + clamp trong khung
       nodes.forEach((n) => {
         const d = disp[n.id];

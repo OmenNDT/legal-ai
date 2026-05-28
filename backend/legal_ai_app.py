@@ -34,9 +34,9 @@ def _run_matcher(matcher_cls, algo_key):
     trace = bool(payload.get("trace", True))
     if not pattern:
         return jsonify({"error": "Pattern must not be empty."}), 400
-    matcher = matcher_cls(case_sensitive=case_sensitive)
+    matcher = matcher_cls(case_sensitive = case_sensitive)
     t0 = time.perf_counter()
-    res = matcher.search(text, pattern, trace=trace)
+    res = matcher.search(text, pattern, trace = trace)
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
     d = res.to_dict()
     d["algorithm"] = algo_key
@@ -99,7 +99,7 @@ def string_matching_export():
             lines.append(f"\t+ {label}: {comparisons.get(k, '—')}")
     content = "\n".join(lines) + "\n"
     out_dir = ROOT / "backend" / "string_matching" / "result"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents = True, exist_ok = True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_pattern = _re.sub(r"[^a-zA-Z0-9_-]+", "_", pattern.strip())[:30] or "pattern"
     filename = f"result_{ts}_{safe_pattern}.txt"
@@ -111,6 +111,8 @@ def _register_summarisation_blueprints():
     sum_root = str(TEXT_SUM_ROOT)
     original_path = sys.path[:]
     sys.path = [sum_root] + [p for p in sys.path if p != sum_root]
+    for k in [k for k in sys.modules if k == "backend" or k.startswith("backend.")]:
+        del sys.modules[k]
     try:
         import backend.app.routes.summarize as ts_summarize
         import backend.app.routes.extract as ts_extract
@@ -122,7 +124,7 @@ def _register_summarisation_blueprints():
         from backend.utils.logger import Logger
 
         settings = get_settings()
-        Logger.setup(settings.LOG_DIR, name="api")
+        Logger.setup(settings.LOG_DIR, name = "api")
         AppState.instance()
 
         app.register_blueprint(ts_summarize.bp)
@@ -150,7 +152,7 @@ def health():
         "status": "ok",
         "modules": {
             "string_matching": True,
-            "text_summarisation": True,
+            "text_summarisation": True
         }
     })
 
