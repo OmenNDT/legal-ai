@@ -5,7 +5,7 @@ data/embeddings/
 
 # Solar panel dataset & model weights
 backend/solar/data/
-backend/solar/models/*.pt
+backend/solar/models/
 backend/solar/DemoDoAn/
 
 # Text summarisation (large outputs & PDFs)
