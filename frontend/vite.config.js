@@ -9,7 +9,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:9010', // Flask backend
+        target: 'http://localhost:9010', // Unified Legal AI backend
         changeOrigin: true,
         secure: false,
       }

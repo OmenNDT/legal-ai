@@ -1,8 +1,8 @@
 import axios from 'axios';
 
-//Instance axios dùng chung
+// Instance axios dùng chung. Mọi request sẽ qua /api/* và được Vite proxy về Flask 9020.
 export const api = axios.create({
-  baseURL: 'api',
+  baseURL: '/api',
   headers: {
     'Content-Type': 'application/json',
   },

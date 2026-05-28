@@ -54,18 +54,10 @@ export const register = async (name, email, password) => {
   }
 };
 
-export const requestPasswordReset = async (email) => {
+// Đổi mật khẩu trực tiếp bằng email (không OTP)
+export const resetPassword = async (email, password) => {
   try {
-    const { data } = await api.post('/auth/forgot-password', { email });
-    return data; // { sent: true, dev_otp?: "123456" }
-  } catch (err) {
-    throw extractError(err, 'Không gửi được mã OTP.');
-  }
-};
-
-export const resetPassword = async (email, otp, password) => {
-  try {
-    const { data } = await api.post('/auth/reset-password', { email, otp, password });
+    const { data } = await api.post('/auth/reset-password', { email, password });
     return data;
   } catch (err) {
     throw extractError(err, 'Đặt lại mật khẩu thất bại.');

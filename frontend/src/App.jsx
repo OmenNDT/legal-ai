@@ -6,13 +6,13 @@ import LandingPage from './components/LandingPage';
 import TabSearch from './components/TabSearch';
 import TabAssistant from './components/TabAssistant';
 import TabStringMatching from './components/TabStringMatching';
-import TabRagExtract from './components/TabRagExtract';
+import TabSummarization from './components/TabSummarization';
 import AuthModal from './components/AuthModal';
 import { clearAuth, getStoredUser } from './services/auth';
 
 const { Content } = Layout;
 
-const VALID_TABS = ['home', 'search', 'ai-assistant', 'string-matching', 'rag-extract'];
+const VALID_TABS = ['home', 'search', 'ai-assistant', 'string-matching', 'summarization'];
 const tabFromHash = () => {
   const t = window.location.hash.replace(/^#\/?/, '');
   return VALID_TABS.includes(t) ? t : 'home';
@@ -64,8 +64,8 @@ const App = () => {
         return <TabAssistant defaultIntent={chatIntent} />;
       case 'string-matching':
         return <TabStringMatching />;
-      case 'rag-extract':
-        return <TabRagExtract />;
+      case 'summarization':
+        return <TabSummarization />;
       default:
         return <LandingPage onNavigate={handleTabChange} />;
     }

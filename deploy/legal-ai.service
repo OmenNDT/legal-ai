@@ -1,0 +1,21 @@
+[Unit]
+Description=Legal AI — String Matching + Text Summarisation (port 9010)
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=sontn
+WorkingDirectory=/home/sontn/legal-ai
+# PYTHONPATH phải trỏ cả project root lẫn text_sumarisation để resolve import `backend.*`
+Environment="PYTHONPATH=/home/sontn/legal-ai:/home/sontn/legal-ai/backend/text_sumarisation"
+Environment="APP_PORT=9010"
+Environment="APP_PREFIX="
+EnvironmentFile=/home/sontn/legal-ai/.env
+ExecStart=/usr/bin/python3 -m backend.legal_ai_app
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

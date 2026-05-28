@@ -1,26 +1,23 @@
 import { useState } from 'react';
-import { X, User, Lock, Mail, Eye, EyeOff, Scale, KeyRound, ArrowLeft } from 'lucide-react';
-import { login, register, requestPasswordReset, resetPassword } from '../services/auth';
+import { X, User, Lock, Mail, Eye, EyeOff, Scale, ArrowLeft } from 'lucide-react';
+import { login, register, resetPassword } from '../services/auth';
 
 const MODES = {
   LOGIN: 'login',
   REGISTER: 'register',
   FORGOT: 'forgot',
-  RESET: 'reset',
 };
 
 const titleFor = (mode) => ({
   [MODES.LOGIN]: 'Đăng nhập',
   [MODES.REGISTER]: 'Tạo tài khoản',
-  [MODES.FORGOT]: 'Quên mật khẩu',
-  [MODES.RESET]: 'Đặt lại mật khẩu',
+  [MODES.FORGOT]: 'Đặt lại mật khẩu',
 }[mode]);
 
 const subtitleFor = (mode) => ({
   [MODES.LOGIN]: 'Truy cập hệ thống tra cứu pháp luật',
   [MODES.REGISTER]: 'Tham gia cộng đồng pháp lý',
-  [MODES.FORGOT]: 'Nhập email để nhận mã OTP',
-  [MODES.RESET]: 'Nhập mã OTP và mật khẩu mới',
+  [MODES.FORGOT]: 'Nhập email đã đăng ký + mật khẩu mới',
 }[mode]);
 
 const AuthModal = ({ isOpen, onClose, onLogin, dismissible = true }) => {
@@ -35,13 +32,12 @@ const AuthModal = ({ isOpen, onClose, onLogin, dismissible = true }) => {
     password: '',
     confirmPassword: '',
     name: '',
-    otp: '',
   });
 
   if (!isOpen) return null;
 
   const resetState = () => {
-    setForm({ email: '', password: '', confirmPassword: '', name: '', otp: '' });
+    setForm({ email: '', password: '', confirmPassword: '', name: '' });
     setError('');
     setInfo('');
     setShowPass(false);
@@ -68,8 +64,7 @@ const AuthModal = ({ isOpen, onClose, onLogin, dismissible = true }) => {
       if (form.password.length < 6) return 'Mật khẩu phải có ít nhất 6 ký tự.';
       if (form.password !== form.confirmPassword) return 'Mật khẩu xác nhận không khớp.';
     }
-    if (mode === MODES.RESET) {
-      if (!/^\d{6}$/.test(form.otp.trim())) return 'Mã OTP phải gồm 6 chữ số.';
+    if (mode === MODES.FORGOT) {
       if (form.password.length < 6) return 'Mật khẩu phải có ít nhất 6 ký tự.';
       if (form.password !== form.confirmPassword) return 'Mật khẩu xác nhận không khớp.';
     }
@@ -95,15 +90,11 @@ const AuthModal = ({ isOpen, onClose, onLogin, dismissible = true }) => {
         onLogin(user);
         handleClose();
       } else if (mode === MODES.FORGOT) {
-        const res = await requestPasswordReset(form.email);
-        const devNote = res?.dev_otp ? ` (DEV OTP: ${res.dev_otp})` : '';
-        setInfo(`Nếu email tồn tại, mã OTP đã được gửi.${devNote}`);
-        setMode(MODES.RESET);
-      } else if (mode === MODES.RESET) {
-        await resetPassword(form.email, form.otp, form.password);
+        // Đổi mật khẩu trực tiếp: email + password mới (không OTP)
+        await resetPassword(form.email, form.password);
         setInfo('Đặt lại mật khẩu thành công. Vui lòng đăng nhập.');
         setMode(MODES.LOGIN);
-        setForm({ email: form.email, password: '', confirmPassword: '', name: '', otp: '' });
+        setForm({ email: form.email, password: '', confirmPassword: '', name: '' });
       }
     } catch (err) {
       setError(err.message);
@@ -115,15 +106,13 @@ const AuthModal = ({ isOpen, onClose, onLogin, dismissible = true }) => {
   const submitLabel = {
     [MODES.LOGIN]: 'Đăng nhập',
     [MODES.REGISTER]: 'Đăng ký',
-    [MODES.FORGOT]: 'Gửi mã OTP',
-    [MODES.RESET]: 'Đặt lại mật khẩu',
+    [MODES.FORGOT]: 'Đặt lại mật khẩu',
   }[mode];
 
   const showName = mode === MODES.REGISTER;
-  const showOtp = mode === MODES.RESET;
-  const showPassword = mode === MODES.LOGIN || mode === MODES.REGISTER || mode === MODES.RESET;
-  const showConfirm = mode === MODES.REGISTER || mode === MODES.RESET;
-  const showBack = mode === MODES.FORGOT || mode === MODES.RESET;
+  const showPassword = true;
+  const showConfirm = mode === MODES.REGISTER || mode === MODES.FORGOT;
+  const showBack = mode === MODES.FORGOT;
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center">
@@ -181,24 +170,12 @@ const AuthModal = ({ isOpen, onClose, onLogin, dismissible = true }) => {
               <input
                 type="email" required value={form.email} onChange={onField('email')}
                 placeholder="you@example.com"
-                disabled={mode === MODES.RESET}
-                className={inputCls + (mode === MODES.RESET ? ' bg-gray-100' : '')}
+                className={inputCls}
               />
             </Field>
 
-            {showOtp && (
-              <Field label="Mã OTP (6 chữ số)" icon={<KeyRound size={16} />}>
-                <input
-                  type="text" inputMode="numeric" maxLength={6} required
-                  value={form.otp} onChange={onField('otp')}
-                  placeholder="123456"
-                  className={inputCls + ' tracking-widest font-mono'}
-                />
-              </Field>
-            )}
-
             {showPassword && (
-              <Field label={mode === MODES.RESET ? 'Mật khẩu mới' : 'Mật khẩu'} icon={<Lock size={16} />}>
+              <Field label={mode === MODES.FORGOT ? 'Mật khẩu mới' : 'Mật khẩu'} icon={<Lock size={16} />}>
                 <input
                   type={showPass ? 'text' : 'password'} required minLength={6}
                   value={form.password} onChange={onField('password')}
@@ -283,19 +260,10 @@ const AuthModal = ({ isOpen, onClose, onLogin, dismissible = true }) => {
             )}
             {mode === MODES.FORGOT && (
               <p>
-                Đã có mã OTP?{' '}
-                <button type="button" onClick={() => switchMode(MODES.RESET)}
+                Đã nhớ mật khẩu?{' '}
+                <button type="button" onClick={() => switchMode(MODES.LOGIN)}
                   className="text-[#722F37] font-semibold hover:underline">
-                  Đặt lại mật khẩu
-                </button>
-              </p>
-            )}
-            {mode === MODES.RESET && (
-              <p>
-                Chưa nhận được mã?{' '}
-                <button type="button" onClick={() => switchMode(MODES.FORGOT)}
-                  className="text-[#722F37] font-semibold hover:underline">
-                  Gửi lại OTP
+                  Đăng nhập
                 </button>
               </p>
             )}

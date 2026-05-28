@@ -1,5 +1,5 @@
 import { Menu, Layout, Tooltip, Dropdown } from 'antd';
-import { Search, MessageSquare, Scale, Home, User, LogOut, ChevronDown, Cpu, Database } from 'lucide-react';
+import { Search, MessageSquare, Scale, Home, User, LogOut, ChevronDown, Cpu, Sparkles } from 'lucide-react';
 
 const { Header } = Layout;
 
@@ -26,9 +26,9 @@ const AppHeader = ({ activeTab, onTabChange, user, onOpenAuth, onLogout }) => {
       label: 'Tìm kiếm văn bản',
     },
     {
-      key: 'rag-extract',
-      icon: <Database size={16} />,
-      label: 'RAG Extract',
+      key: 'summarization',
+      icon: <Sparkles size={16} />,
+      label: 'Tóm tắt văn bản',
     },
   ];
 
