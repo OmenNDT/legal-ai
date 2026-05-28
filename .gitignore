@@ -3,6 +3,19 @@ data/raw/
 data/processed/
 data/embeddings/
 
+# Solar panel dataset & model weights
+backend/solar/data/
+backend/solar/models/*.pt
+backend/solar/DemoDoAn/
+
+# Text summarisation (large outputs & PDFs)
+backend/text_sumarisation/data/
+backend/text_sumarisation/outputs/
+
+# Regression raw data & JDBC driver
+backend/regression/source_code/data_raw/
+backend/regression/source_code/config/driver/*.jar
+
 # Python cache
 __pycache__/
 *.pyc
@@ -38,13 +51,30 @@ venv/
 
 # Models (too large for git)
 *.pth
+*.pt
 *.bin
 *.onnx
 *.pickle
 *.gpickle
+*.safetensors
+
+# Binary/data files
+*.jar
+*.zip
+*.pdf
+*.doc
+*.docx
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.csv
 
 # Large directories
-data/
-data_raw/
-models/
-chroma_data/
+backend/text_summarisation/data/
+backend/string_matching/result/
+backend/text_summarisation/outputs/
+
+# frontend
+frontend/node_modules/
+frontend/dist/
