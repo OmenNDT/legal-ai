@@ -71,6 +71,7 @@ venv/
 *.csv
 
 # Large directories
+backend/chatbot/data/
 backend/text_summarisation/data/
 backend/string_matching/result/
 backend/text_summarisation/outputs/
