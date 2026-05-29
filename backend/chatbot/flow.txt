@@ -1,0 +1,81 @@
+============================================================
+TÀI LIỆU THIẾT KẾ: HỆ THỐNG RAG PHÁP LUẬT THÔNG MINH
+============================================================
+
+1. TỔNG QUAN HỆ THỐNG
+---------------------
+- Mô hình lõi: BARTpho (Fine-tuned via LoRA)
+- Cơ sở dữ liệu: PostgreSQL (pgvector & pg_trgm)
+- Môi trường: WSL2 / Docker
+
+2. LUỒNG HOẠT ĐỘNG (PIPELINE FLOW)
+----------------------------------
+A. Phase 1: Data Ingestion (Xây dựng Kho dữ liệu Vector)
+- Bóc tách văn bản: Sử dụng Python đọc PDF, dùng Regex nhận diện cấu trúc Chương/Điều/Khoản/Điểm.
+- Đóng gói Context: Định dạng "Tên Luật - Chương - Điều - Khoản: Nội dung".
+- Lưu trữ: Lưu vào bảng `law_chunks` kèm Vector 1024 chiều (BGE-M3).
+
+B. Phase 2: Training Pipeline (Fine-tuning)
+- Ánh xạ: Dùng Vector Search tìm ngữ cảnh tương ứng từ `law_chunks` cho dữ liệu `qa_data`.
+- Định dạng: Prompt = "Ngữ cảnh: {Context} | Câu hỏi: {Question} | Trả lời: {Golden_Answer}".
+- Huấn luyện: Fine-tune BARTpho bằng LoRA trên tập JSONL đã tạo.
+
+C. Phase 3: Inference Pipeline (Vận hành thực tế)
+- Hybrid Search: Kết hợp Vector Search (HNSW) và Text Search (GIN) để tìm Khoản luật.
+- Generation: Đưa Prompt vào mô hình BARTpho để sinh câu trả lời.
+- Logging: Ghi vết vào `inference_logs` để giám sát.
+
+3. CẤU TRÚC CƠ SỞ DỮ LIỆU (POSTGRESQL SCHEMA)
+---------------------------------------------
+
+A. Bảng 'documents' (Danh mục luật)
+- id: SERIAL (PK)
+- doc_code: VARCHAR(100)
+- doc_name: TEXT
+- doc_type: VARCHAR(50)
+- issue_year: INT
+- created_at: TIMESTAMP
+
+B. Bảng 'law_chunks' (Kho dữ liệu RAG)
+- id: SERIAL (PK)
+- document_id: INT (FK)
+- hierarchy_path: TEXT
+- phan/chuong/muc/dieu/khoan/diem: VARCHAR/TEXT
+- content: TEXT
+- embedding: VECTOR(1024)
+- created_at: TIMESTAMP
+
+C. Bảng 'qa_data' (Dữ liệu Hỏi-Đáp gốc)
+- id, id1: BIGINT
+- question, answer: TEXT
+- idx: BIGINT
+
+D. Bảng 'training_samples' (Tập dataset Fine-tune)
+- id: SERIAL (PK)
+- qa_id_ref: BIGINT
+- chunk_id_ref: INT (FK)
+- similarity_score: FLOAT
+- formatted_prompt: TEXT
+- target_answer: TEXT
+- is_validated: BOOLEAN
+
+E. Bảng 'inference_logs' (Nhật ký vận hành)
+- id: BIGSERIAL (PK)
+- user_question: TEXT
+- retrieved_chunk_ids: INT[]
+- generated_answer: TEXT
+- latency_ms: INT
+- user_feedback: INT
+- created_at: TIMESTAMP
+
+4. CÁC EXTENSIONS CẦN CÀI ĐẶT
+-----------------------------
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+5. CÁC INDEX TỐI ƯU HIỆU NĂNG
+-----------------------------
+- HNSW Index cho embedding trên bảng law_chunks.
+- GIN Index cho content trên bảng law_chunks (pg_trgm).
+- B-Tree Index cho các khóa ngoại và cột lọc nhanh.
+============================================================
