@@ -1,0 +1,209 @@
+================================================================================
+BỘ CÂU HỎI KIỂM THỬ TRỢ LÝ PHÁP LÝ — TÌNH HUỐNG CÔ ĐỌNG
+================================================================================
+Hệ thống: 17 luật Việt Nam, 23.486 chunks trong PostgreSQL
+Mô hình: BGE-M3 + BARTpho-syllable + LoRA (eval_loss=1.148)
+Threshold similarity: 0.62 | Anti-hallucination: ACTIVE
+Hybrid RRF: vector 0.55 + trigram 0.20 + dieu 0.25, pool=200
+================================================================================
+
+NGUYÊN TẮC VIẾT CÂU HỎI:
+- Có context tình huống ngắn (số tiền, độ tuổi, hoàn cảnh)
+- Đặt câu hỏi pháp lý cụ thể có từ khóa khớp tên Điều luật
+- Tránh nhiều mệnh đề lồng nhau → BGE-M3 hiểu rõ trọng tâm
+- Dài 15-30 từ là tối ưu
+
+================================================================================
+PHẦN A — 20 TÌNH HUỐNG CÓ TRONG RAG
+================================================================================
+
+# Hình sự (5 câu)
+1. Tội trộm cắp tài sản trị giá 30 triệu đồng bị phạt mức án bao nhiêu năm tù?
+
+2. Tội tham ô tài sản công 500 triệu đồng của giám đốc công ty nhà nước bị
+   phạt mức án bao nhiêu?
+
+3. Người dưới 18 tuổi đánh nhau gây thương tích thì chịu trách nhiệm hình sự
+   ra sao theo quy định?
+
+4. Dùng dao đe dọa cướp tài sản trên đường thì mức phạt theo Bộ luật Hình sự
+   là bao nhiêu năm tù?
+
+5. Đã có vợ mà cưới thêm vợ hai thì phạm tội vi phạm chế độ một vợ một chồng
+   thế nào?
+
+# Dân sự (3 câu)
+6. Cho vay lãi suất 5%/tháng tức 60%/năm có vi phạm quy định về lãi suất theo
+   Bộ luật Dân sự không?
+
+7. Thời hiệu khởi kiện chia thừa kế khi người chết không để lại di chúc là
+   bao lâu?
+
+8. Tài sản chung của vợ chồng được chia thế nào khi ly hôn theo Bộ luật Dân
+   sự?
+
+# Lao động (3 câu)
+9. Người lao động làm việc 5 năm được nghỉ phép hằng năm tối thiểu bao nhiêu
+   ngày?
+
+10. Quy định về loại hợp đồng lao động xác định thời hạn và việc ký liên tiếp
+    nhiều hợp đồng?
+
+11. Mức làm thêm giờ tối đa trong tháng và trong năm theo Bộ luật Lao động
+    2019 là bao nhiêu?
+
+# Hôn nhân & Gia đình (2 câu)
+12. Điều kiện kết hôn về độ tuổi đối với nam và nữ theo Luật Hôn nhân và gia
+    đình 2014?
+
+13. Ly hôn đơn phương được tòa án chấp thuận trong những trường hợp nào theo
+    Luật Hôn nhân và gia đình?
+
+# Đất đai (2 câu)
+14. Quyền chung của người sử dụng đất theo Luật Đất đai 2024 gồm những quyền
+    gì?
+
+15. Quyền của người sử dụng đất nông nghiệp trong việc cho thuê đất theo Luật
+    Đất đai 2024?
+
+# Cư trú & Hộ tịch (2 câu)
+16. Thủ tục đăng ký thường trú tại nơi ở mới và thời hạn giải quyết theo Luật
+    Cư trú 2020?
+
+17. Thủ tục đăng ký khai sinh cho trẻ mới sinh và thời hạn theo Luật Hộ tịch
+    2014?
+
+# Bảo hiểm (2 câu)
+18. Mức đóng bảo hiểm xã hội bắt buộc của người lao động hưởng lương 15 triệu
+    đồng/tháng?
+
+19. Đối tượng tham gia bảo hiểm y tế bắt buộc với người cao tuổi không có
+    lương hưu?
+
+# Chứng khoán (1 câu)
+20. Điều kiện chào bán cổ phiếu lần đầu ra công chúng IPO theo Luật Chứng
+    khoán 2019?
+
+
+================================================================================
+PHẦN B — 20 TÌNH HUỐNG KHÔNG CÓ TRONG RAG
+================================================================================
+
+# Luật chuyên đề chưa ingest vào DB (12 câu)
+1. Cán bộ nhận quà 50 triệu đồng có vi phạm Luật Phòng chống tham nhũng không?
+
+2. Doanh nghiệp thu thập dữ liệu cá nhân khách hàng cần tuân thủ Luật An ninh
+   mạng thế nào?
+
+3. Quảng cáo thực phẩm chức năng chữa bệnh có vi phạm Luật Quảng cáo không?
+
+4. Cách tính thuế thu nhập cá nhân với thu nhập 30 triệu đồng và mức giảm trừ
+   gia cảnh?
+
+5. Quy định thuế giá trị gia tăng VAT đối với hàng xuất khẩu may mặc?
+
+6. Xây nhà cấp 4 trên đất thổ cư nông thôn có cần xin phép theo Luật Xây dựng?
+
+7. Quyền và nghĩa vụ của sinh viên đại học theo Luật Giáo dục đại học?
+
+8. Hành vi bị cấm trong khai thác cát sông theo Luật Khoáng sản?
+
+9. Mức phạt nồng độ cồn 0.4mg/L khi lái xe máy theo Nghị định 100/2019?
+
+10. Mức xử phạt hành chính khi xe máy vượt đèn đỏ là bao nhiêu?
+
+11. Thủ tục cấp visa du lịch 30 ngày cho người nước ngoài vào Việt Nam?
+
+12. Quy định thừa kế tài sản số Bitcoin trị giá 5 tỷ đồng theo pháp luật?
+
+# Câu hỏi phi pháp luật (8 câu)
+13. Công thức nấu phở bò Hà Nội ngon và đơn giản cho gia đình?
+
+14. Giá iPhone 16 Pro Max mới nhất là bao nhiêu?
+
+15. Lịch thi đấu World Cup 2026 vòng bảng có những trận nào?
+
+16. Lộ trình học lập trình Python cho người mới bắt đầu là dân kế toán?
+
+17. Chế độ ăn và tập luyện để giảm 10kg trong 1 tháng hiệu quả?
+
+18. Khách sạn view đẹp Đà Lạt giá 1-2 triệu/đêm khu vực nào?
+
+19. Trung tâm tiếng Anh online giáo viên bản ngữ học phí 200k/buổi cho trẻ
+    10 tuổi?
+
+20. Giá vàng SJC hôm nay là bao nhiêu một cây?
+
+
+================================================================================
+TIÊU CHÍ ĐÁNH GIÁ
+================================================================================
+
+✅ ĐÚNG (PHẦN A):
+   - Trả lời có cấu trúc "Căn cứ Điều X Luật Y..."
+   - Tên luật trong câu trả lời PHẢI khớp với 17 luật trong DB
+   - Có dẫn chứng số Điều, Khoản cụ thể
+   - Áp dụng đúng vào tình huống
+
+✅ ĐÚNG (PHẦN B):
+   - Trả lời "Xin lỗi, tôi không tìm thấy thông tin..." (refuse)
+   - HOẶC fallback trích chunks thật (mode = extractive_fallback)
+   - KHÔNG được bịa tên Luật/Nghị định không có trong DB
+
+❌ SAI:
+   - Bịa tên luật/nghị định/điều khoản không có thật
+   - Refuse câu hợp lệ trong DB
+   - Trả lời không liên quan tình huống
+
+
+================================================================================
+17 LUẬT ĐÃ INGEST (23.486 chunks)
+================================================================================
+
+Hình sự (4 luật):
+- Bộ luật Hình sự 2015 — 4.764 chunks
+- Bộ luật Tố tụng hình sự 2015 — 2.818 chunks
+
+Dân sự (2 luật):
+- Bộ luật Dân sự 2015 — 2.412 chunks
+- Bộ luật Tố tụng dân sự 2015 — 2.368 chunks
+
+Lao động (1 luật):
+- Bộ luật Lao động 2019 — 1.151 chunks
+
+Hôn nhân & Đất đai (3 luật):
+- Luật Hôn nhân và gia đình 2014 — 507 chunks
+- Luật Đất đai 2013 — 640 chunks
+- Luật Đất đai 2024 — 1.024 chunks
+
+Cư trú & Hộ tịch (2 luật):
+- Luật Cư trú 2020 — 296 chunks
+- Luật Hộ tịch 2014 — 345 chunks
+
+Bảo hiểm (2 luật):
+- Luật Bảo hiểm xã hội 2014 — 732 chunks
+- Luật Bảo hiểm y tế 2008 — 345 chunks
+
+Khác (5 luật):
+- Bộ luật Hàng hải Việt Nam 2015 — 1.649 chunks
+- Luật Doanh nghiệp 2020 — 1.937 chunks
+- Luật Kế toán 2015 — 577 chunks
+- Luật Chứng khoán 2019 — 1.216 chunks
+- Luật Giao thông đường bộ 2008 — 705 chunks
+
+
+================================================================================
+KHUYẾN NGHỊ KHI HỎI
+================================================================================
+
+✅ NÊN:
+   - Hỏi cô đọng, có từ khóa khớp tên Điều luật ("trộm cắp", "ly hôn",
+     "thừa kế", "IPO", "thường trú")
+   - Đặt câu hỏi 15-30 từ, có context cụ thể (số tiền, độ tuổi)
+   - Một câu hỏi chỉ tập trung 1 vấn đề pháp lý
+
+❌ TRÁNH:
+   - Câu kể chuyện dài, nhiều mệnh đề lồng ("Hôm qua tôi đi làm về thì gặp
+     hàng xóm và họ kể rằng...")
+   - Hỏi nhiều chủ đề pháp lý cùng lúc trong 1 câu
+   - Dùng tiếng Việt không dấu (sim sẽ giảm 30-40%)

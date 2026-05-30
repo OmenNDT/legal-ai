@@ -1,76 +1,94 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
-import { Button, Tag, Tooltip, Badge } from 'antd';
-import { ChevronLeft, ChevronRight, X, FileText, Highlighter } from 'lucide-react';
+import { Button, Tag, Tooltip, Badge, Spin, Empty } from 'antd';
+import { ChevronLeft, ChevronRight, X, FileText, Highlighter, List } from 'lucide-react';
+import { getDieuContent } from '../services/api';
 
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const stripDiacritics = (s) => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '');
 
 const PreviewPanel = ({ document, keyword, onClose }) => {
   const contentRef = useRef(null);
   const [currentMatch, setCurrentMatch] = useState(0);
-  const [prevResetKey, setPrevResetKey] = useState(`${document?.id}::${keyword}`);
+  const [activeDieu, setActiveDieu] = useState(null);
+  const [dieuContent, setDieuContent] = useState(null);
+  const [loadingContent, setLoadingContent] = useState(false);
+  const [contentError, setContentError] = useState(null);
 
-  const fullContent = document?.fullContent;
+  const outline = document?.outline;
+  const outlineLoading = document && outline === undefined;
+
+  // Auto-pick first Điều khi outline đã load
+  useEffect(() => {
+    if (!outline || outline.length === 0) {
+      setActiveDieu(null);
+      return;
+    }
+    // Nếu có keyword, ưu tiên Điều đầu tiên có tiêu đề khớp
+    if (keyword) {
+      const kw = stripDiacritics(keyword.toLowerCase());
+      const hit = outline.find(o => stripDiacritics(o.title.toLowerCase()).includes(kw));
+      if (hit) {
+        setActiveDieu(hit.dieu_key);
+        return;
+      }
+    }
+    setActiveDieu(outline[0].dieu_key);
+  }, [document?.id, outline, keyword]);
+
+  // Fetch nội dung khi đổi Điều
+  useEffect(() => {
+    if (!document?.id || !activeDieu) {
+      setDieuContent(null);
+      return;
+    }
+    let cancelled = false;
+    setLoadingContent(true);
+    setContentError(null);
+    getDieuContent(document.id, activeDieu)
+      .then(text => { if (!cancelled) setDieuContent(text); })
+      .catch(err => { if (!cancelled) setContentError(err.message); })
+      .finally(() => { if (!cancelled) setLoadingContent(false); });
+    return () => { cancelled = true; };
+  }, [document?.id, activeDieu]);
 
   const matches = useMemo(() => {
-    if (!fullContent || !keyword) return [];
+    if (!dieuContent || !keyword) return [];
     const regex = new RegExp(`(${escapeRegex(keyword)})`, 'gi');
     const indices = [];
-    let match;
-    while ((match = regex.exec(fullContent)) !== null) {
-      indices.push(match.index);
-    }
+    let m;
+    while ((m = regex.exec(dieuContent)) !== null) indices.push(m.index);
     return indices;
-  }, [fullContent, keyword]);
+  }, [dieuContent, keyword]);
 
   const totalMatches = matches.length;
 
   const scrollToMatch = useCallback((index) => {
     if (!contentRef.current || totalMatches === 0) return;
-    const markElements = contentRef.current.querySelectorAll('mark[data-match]');
-    if (markElements[index]) {
-      markElements[index].scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const marks = contentRef.current.querySelectorAll('mark[data-match]');
+    if (marks[index]) {
+      marks[index].scrollIntoView({ behavior: 'smooth', block: 'center' });
       setCurrentMatch(index);
     }
   }, [totalMatches]);
 
   const goToNext = useCallback(() => {
     if (totalMatches === 0) return;
-    const next = (currentMatch + 1) % totalMatches;
-    scrollToMatch(next);
+    scrollToMatch((currentMatch + 1) % totalMatches);
   }, [currentMatch, totalMatches, scrollToMatch]);
 
   const goToPrev = useCallback(() => {
     if (totalMatches === 0) return;
-    const prev = (currentMatch - 1 + totalMatches) % totalMatches;
-    scrollToMatch(prev);
+    scrollToMatch((currentMatch - 1 + totalMatches) % totalMatches);
   }, [currentMatch, totalMatches, scrollToMatch]);
 
-  // Reset currentMatch when document or keyword changes. This uses the
-  // store-previous-prop pattern (https://react.dev/reference/react/useState#storing-information-from-previous-renders)
-  // to avoid setState inside an effect.
-  const currentResetKey = `${document?.id}::${keyword}`;
-  if (prevResetKey !== currentResetKey) {
-    setPrevResetKey(currentResetKey);
-    setCurrentMatch(0);
-  }
+  useEffect(() => { setCurrentMatch(0); }, [activeDieu, keyword]);
 
   useEffect(() => {
     if (totalMatches > 0) {
-      const t = setTimeout(() => scrollToMatch(0), 100);
+      const t = setTimeout(() => scrollToMatch(0), 80);
       return () => clearTimeout(t);
     }
-  }, [document?.id, keyword, totalMatches, scrollToMatch]);
-
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if (e.key === 'F3' || (e.key === 'Enter' && e.shiftKey)) {
-        e.preventDefault();
-        goToNext();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [goToNext]);
+  }, [totalMatches, scrollToMatch]);
 
   if (!document) {
     return (
@@ -81,17 +99,16 @@ const PreviewPanel = ({ document, keyword, onClose }) => {
     );
   }
 
-  const renderHighlightedContent = () => {
-    if (!fullContent || !keyword) return fullContent;
-
-    const parts = fullContent.split(new RegExp(`(${escapeRegex(keyword)})`, 'gi'));
-    let matchCounter = -1;
-
+  const renderHighlighted = () => {
+    if (!dieuContent) return null;
+    if (!keyword) return dieuContent;
+    const parts = dieuContent.split(new RegExp(`(${escapeRegex(keyword)})`, 'gi'));
+    let counter = -1;
     return parts.map((part, i) => {
       if (part.toLowerCase() === keyword.toLowerCase()) {
-        matchCounter++;
-        const isActive = matchCounter === currentMatch;
-        const idx = matchCounter;
+        counter++;
+        const isActive = counter === currentMatch;
+        const idx = counter;
         return (
           <mark
             key={i}
@@ -125,6 +142,9 @@ const PreviewPanel = ({ document, keyword, onClose }) => {
                 {document.type}
               </Tag>
               <span className="text-xs text-gray-400">{document.year}</span>
+              {outline && outline.length > 0 && (
+                <span className="text-xs text-gray-400">• {outline.length} điều</span>
+              )}
             </div>
           </div>
         </div>
@@ -135,11 +155,8 @@ const PreviewPanel = ({ document, keyword, onClose }) => {
               <Tooltip title="Match trước">
                 <Button type="text" size="small" icon={<ChevronLeft size={14} />} onClick={goToPrev} />
               </Tooltip>
-              <Badge
-                count={`${currentMatch + 1}/${totalMatches}`}
-                style={{ backgroundColor: '#1e3a5f', fontSize: '11px' }}
-              />
-              <Tooltip title="Match tiếp theo">
+              <Badge count={`${currentMatch + 1}/${totalMatches}`} style={{ backgroundColor: '#1e3a5f', fontSize: '11px' }} />
+              <Tooltip title="Match tiếp">
                 <Button type="text" size="small" icon={<ChevronRight size={14} />} onClick={goToNext} />
               </Tooltip>
             </div>
@@ -148,24 +165,73 @@ const PreviewPanel = ({ document, keyword, onClose }) => {
         </div>
       </div>
 
-      {/* Toolbar */}
-      {keyword && (
+      {keyword && dieuContent && (
         <div className="px-5 py-2 bg-yellow-50 border-b border-yellow-100 flex items-center gap-2 shrink-0">
           <Highlighter size={14} className="text-yellow-600" />
           <span className="text-xs text-yellow-700">
-            Đang hiển thị <strong>{totalMatches}</strong> vị trí của "<strong>{keyword}</strong>"
+            <strong>{totalMatches}</strong> vị trí của "<strong>{keyword}</strong>" trong điều đang xem
           </span>
         </div>
       )}
 
-      {/* Content */}
-      <div
-        ref={contentRef}
-        className="flex-1 overflow-y-auto p-6 text-sm leading-relaxed"
-        style={{ color: '#4a4a4a', fontFamily: "'Inter', sans-serif" }}
-      >
-        <div className="whitespace-pre-line">
-          {renderHighlightedContent()}
+      {/* Body: outline + content */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Outline */}
+        <div className="w-72 shrink-0 border-r border-[#e8e4e0] bg-[#fafaf8] flex flex-col">
+          <div className="px-4 py-2 border-b border-[#e8e4e0] flex items-center gap-2 text-xs uppercase tracking-wide text-[#9a8478] shrink-0">
+            <List size={14} /> Mục lục
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            {outlineLoading ? (
+              <div className="flex justify-center py-6"><Spin size="small" /></div>
+            ) : !outline || outline.length === 0 ? (
+              <div className="p-4">
+                <Empty
+                  description={<span className="text-xs text-gray-500">Văn bản chưa có nội dung</span>}
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                />
+              </div>
+            ) : (
+              <ul className="py-1">
+                {outline.map(o => {
+                  const isActive = o.dieu_key === activeDieu;
+                  return (
+                    <li key={o.dieu_key}>
+                      <button
+                        onClick={() => setActiveDieu(o.dieu_key)}
+                        className={`w-full text-left px-4 py-2 text-xs leading-snug border-l-2 transition-colors ${
+                          isActive
+                            ? 'bg-white border-[#1e3a5f] text-[#1e3a5f] font-semibold'
+                            : 'border-transparent text-[#4a4a4a] hover:bg-white/60'
+                        }`}
+                      >
+                        {o.title}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        </div>
+
+        {/* Content */}
+        <div
+          ref={contentRef}
+          className="flex-1 overflow-y-auto p-6 text-sm leading-relaxed"
+          style={{ color: '#4a4a4a', fontFamily: "'Inter', sans-serif" }}
+        >
+          {!activeDieu ? (
+            <div className="text-gray-400 italic">Chọn một điều để xem nội dung.</div>
+          ) : loadingContent ? (
+            <div className="flex items-center gap-2 text-gray-400"><Spin size="small" /> Đang tải điều…</div>
+          ) : contentError ? (
+            <div className="text-red-500 italic">Lỗi: {contentError}</div>
+          ) : (
+            <div className="whitespace-pre-line">
+              {renderHighlighted()}
+            </div>
+          )}
         </div>
       </div>
     </div>

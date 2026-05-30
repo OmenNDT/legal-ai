@@ -17,6 +17,6 @@ class Embedder:
             list(texts),
             batch_size = batch_size,
             normalize_embeddings = True,
-            show_progress_bar  = True
+            show_progress_bar = True
         )
         return [v.tolist() for v in vecs]

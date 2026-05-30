@@ -72,9 +72,16 @@ venv/
 
 # Large directories
 backend/chatbot/data/
+backend/chatbot/model/
+backend/chatbot/training/splits/
 backend/text_summarisation/data/
-backend/string_matching/result/
 backend/text_summarisation/outputs/
+backend/string_matching/result/
+
+# Large data files
+*.jsonl
+*.pkl
+*.rar
 
 # frontend
 frontend/node_modules/

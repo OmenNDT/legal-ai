@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Input, Card, Tag, Spin, Empty, Typography } from 'antd';
 import { Search, BookOpen, ArrowRight } from 'lucide-react';
-import { searchLaws } from '../services/api';
+import { searchLaws, getAllLaws, getLawOutline } from '../services/api';
 import ResultHighlight from './ResultHighlight';
 import PreviewPanel from './PreviewPanel';
 
@@ -16,6 +16,41 @@ const TabSearch = () => {
   const [selectedDoc, setSelectedDoc] = useState(null);
   const [sidebarWidth, setSidebarWidth] = useState(420);
   const [isResizing, setIsResizing] = useState(false);
+  const [featuredDocs, setFeaturedDocs] = useState([]);
+  const [featuredLoading, setFeaturedLoading] = useState(true);
+
+  useEffect(() => {
+    getAllLaws()
+      .then(docs => setFeaturedDocs(docs))
+      .catch(() => {})
+      .finally(() => setFeaturedLoading(false));
+  }, []);
+
+  const docId = selectedDoc?.id;
+  const hasOutline = selectedDoc?.outline !== undefined;
+  useEffect(() => {
+    if (!docId || hasOutline) return;
+    let cancelled = false;
+    console.log('[TabSearch] fetching outline for doc', docId);
+    getLawOutline(docId)
+      .then(full => {
+        if (cancelled) return;
+        console.log('[TabSearch] outline loaded', full.outline?.length, 'điều');
+        setSelectedDoc(prev => {
+          if (!prev || String(prev.id) !== String(full.id)) return prev;
+          return { ...prev, outline: full.outline, chunk_count: full.chunk_count };
+        });
+      })
+      .catch(err => {
+        if (cancelled) return;
+        console.error('[TabSearch] outline error', err);
+        setSelectedDoc(prev => {
+          if (!prev || String(prev.id) !== String(docId)) return prev;
+          return { ...prev, outline: [], outlineError: err.message };
+        });
+      });
+    return () => { cancelled = true; };
+  }, [docId, hasOutline]);
 
   const handleSearch = async (value) => {
     setLoading(true);
@@ -31,12 +66,7 @@ const TabSearch = () => {
     }
   };
 
-  const suggestions = [
-    'Hiến pháp 2013',
-    'Bộ luật Dân sự',
-    'Luật Đất đai',
-    'Luật Kế toán'
-  ];
+  const suggestions = featuredDocs.slice(0, 4).map(d => d.title);
 
     // Resize sidebar
   useEffect(() => {
@@ -266,56 +296,52 @@ const TabSearch = () => {
         {/* Featured Laws */}
         <div className="max-w-5xl mx-auto px-6 pb-12" style={{ background: '#faf9f7' }}>
           <div className="pt-8">
-            <Text 
+            <Text
               className="text-sm uppercase tracking-widest mb-6 block text-center font-semibold"
               style={{ color: '#9a8478', borderBottom: 'none' }}
             >
               Văn bản nổi bật
             </Text>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {[
-                { title: 'Hiến pháp 2013', type: 'Hiến pháp', desc: 'Văn bản pháp lý cao nhất', id: 'hien-phap-2013' },
-                { title: 'Bộ luật Dân sự 2015', type: 'Bộ luật', desc: 'Quy định về quan hệ dân sự', id: 'dan-su-2015' },
-                { title: 'Bộ luật Hình sự 2015', type: 'Bộ luật', desc: 'Quy định về tội phạm', id: 'hinh-su-2015' },
-                { title: 'Luật Đất đai 2013', type: 'Luật', desc: 'Quy định về đất đai', id: 'dat-dai-2013' },
-                { title: 'Luật Kế toán 2015', type: 'Luật', desc: 'Chế độ kế toán và kiểm toán', id: 'ke-toan-2015' },
-                { title: 'Luật Lao động 2019', type: 'Luật', desc: 'Quan hệ lao động và việc làm', id: 'lao-dong-2019' },
-              ].map((law, i) => (
-                <Card 
-                  key={i}
-                  className="hover:shadow-lg transition-all cursor-pointer rounded-xl border-none"
-                  style={{ background: '#ffffff' }}
-                  bodyStyle={{ padding: '14px 16px' }} 
-                  onClick={() => {
-                    setQuery(law.title);
-                    handleSearch(law.title);
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.transform = 'translateY(-2px)';
-                    e.currentTarget.style.boxShadow = '0 10px 25px rgba(0,0,0,0.1)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.transform = 'translateY(0)';
-                    e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.05)';
-                  }}
-                >
-                  <div className="flex items-center gap-4">
-                    <div 
-                      className="w-12 h-12 rounded-xl flex items-center justify-center shrink-0"
-                      style={{ background: 'rgba(232,213,183,0.3)' }}
-                    >
-                      <BookOpen size={20} style={{ color: '#c9a96e' }} />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="text-[#2d2d2d] font-semibold text-sm truncate">{law.title}</div>
-                      <div className="text-xs mt-0.5" style={{ color: '#9a8478' }}>
-                        {law.type} • {law.desc}
+            <Spin spinning={featuredLoading}>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {featuredDocs.map((law, i) => (
+                  <Card
+                    key={law.id || i}
+                    className="hover:shadow-lg transition-all cursor-pointer rounded-xl border-none"
+                    style={{ background: '#ffffff' }}
+                    bodyStyle={{ padding: '14px 16px' }}
+                    onClick={() => {
+                      setQuery(law.title);
+                      handleSearch(law.title);
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.transform = 'translateY(-2px)';
+                      e.currentTarget.style.boxShadow = '0 10px 25px rgba(0,0,0,0.1)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.05)';
+                    }}
+                  >
+                    <div className="flex items-center gap-4">
+                      <div
+                        className="w-12 h-12 rounded-xl flex items-center justify-center shrink-0"
+                        style={{ background: 'rgba(232,213,183,0.3)' }}
+                      >
+                        <BookOpen size={20} style={{ color: '#c9a96e' }} />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-[#2d2d2d] font-semibold text-sm truncate">{law.title}</div>
+                        <div className="text-xs mt-0.5" style={{ color: '#9a8478' }}>
+                          {law.type}{law.year ? ` ${law.year}` : ''}
+                          {law.chunk_count > 0 ? ` • ${law.chunk_count.toLocaleString()} điều khoản` : ''}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                </Card>
-              ))}
-            </div>
+                  </Card>
+                ))}
+              </div>
+            </Spin>
           </div>
         </div>
       </div>

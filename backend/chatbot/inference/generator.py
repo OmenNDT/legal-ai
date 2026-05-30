@@ -11,12 +11,17 @@ class GeneratorConfig:
     max_new_tokens: int = 256
     num_beams: int = 4
     device: str = "auto"
+    # Khi chưa có LoRA checkpoint, mô hình base BARTpho chưa được fine-tune
+    # cho QA → câu sinh ra thường nhiễu. Trong trường hợp đó dùng extractive
+    # (ghép trực tiếp các Điều/Khoản đã retrieve) để câu trả lời chính xác
+    # với văn bản gốc. Set lazy_lora = True để KHÔNG load model nếu không có LoRA.
+    lazy_lora: bool = True
 
     @classmethod
     def from_env(cls) -> "GeneratorConfig":
         return cls(
             base_model = os.getenv("BARTPHO_MODEL", "vinai/bartpho-syllable"),
-            lora_weights = os.getenv("LORA_WEIGHTS", None),
+            lora_weights = os.getenv("LORA_WEIGHTS", None) or None,
             max_new_tokens = int(os.getenv("MAX_NEW_TOKENS", 256))
         )
 
@@ -26,8 +31,16 @@ class Generator:
         self._tokenizer = None
         self._model = None
 
+    @property
+    def mode(self) -> str:
+        return "lora" if self._cfg.lora_weights else "extractive"
+
     def _load(self) -> None:
         if self._model is not None:
+            return
+        if not self._cfg.lora_weights and self._cfg.lazy_lora:
+            # Chưa có LoRA → KHÔNG load BARTpho base (vô nghĩa cho QA).
+            # Pipeline sẽ rơi vào nhánh extractive.
             return
         print(f"[Generator] Nạp model: {self._cfg.base_model}")
         self._tokenizer = AutoTokenizer.from_pretrained(self._cfg.base_model)
@@ -48,7 +61,7 @@ class Generator:
     def generate(self, prompt: str) -> str:
         self._load()
         if self._model is None or self._tokenizer is None:
-            raise RuntimeError("Model hoặc tokenizer chưa được nạp thành công.")
+            raise RuntimeError("Mô hình BARTpho chưa được nạp (chưa có LoRA checkpoint).")
         inputs = self._tokenizer(
             prompt,
             return_tensors = "pt",
@@ -60,7 +73,10 @@ class Generator:
             output_ids = self._model.generate(
                 **inputs,
                 max_new_tokens = self._cfg.max_new_tokens,
-                num_beams = self._cfg.num_beams,
+                num_beams = 6,
+                no_repeat_ngram_size = 3,
+                length_penalty = 1.2,
+                repetition_penalty = 1.15,
                 early_stopping = True
             )
 
